@@ -10,10 +10,6 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
-  # Emit the Xcode 15-compatible pbxproj format (objectVersion 56). Newer
-  # XcodeGen defaults to 77 (Xcode 16), which the macos-14 runner's Xcode 15.4
-  # cannot open. 56 is read by both Xcode 15 and 16.
-  objectVersion: 56
 
 packages:
   GLTFKit2:
