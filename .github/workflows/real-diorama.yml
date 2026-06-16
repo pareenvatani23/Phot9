@@ -93,14 +93,12 @@ jobs:
           REC=$!
           sleep 12
           # Stop with SIGINT and let simctl FINALIZE the moov atom. Do NOT kill -9
-          # early — that truncates the file (missing moov => unplayable). Wait up
+          # early; that truncates the file (missing moov => unplayable). Wait up
           # to 90 s for a clean exit; only force-kill as an absolute last resort.
           kill -INT "$REC" 2>/dev/null
           for i in $(seq 1 90); do kill -0 "$REC" 2>/dev/null || break; sleep 1; done
           kill -9 "$REC" 2>/dev/null || true
           xcrun simctl io "$UDID" screenshot ../demo/real-screenshot.png
-          # Sanity-check the mp4 has a moov atom (index) before publishing.
-          python3 -c "import sys;b=open('../demo/real-orbit.mp4','rb').read();print('HAS_MOOV:', b'moov' in b, 'size:', len(b))"
           ls -la ../demo/real-orbit.mp4 ../demo/real-screenshot.png
           true
 
@@ -110,8 +108,7 @@ jobs:
           [ -f demo/real-orbit.mp4 ] || [ -f demo/real-screenshot.png ] || { echo "no media"; exit 0; }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f demo/real-orbit.mp4 demo/real-screenshot.png \
-            demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg 2>/dev/null || true
+          git add -f demo/real-orbit.mp4 demo/real-screenshot.png demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg 2>/dev/null || true
           git commit -m "CI: real diorama orbit video from demo/input.jpg" || { echo "nothing to commit"; exit 0; }
           git push origin HEAD:claude/diorama-build-spec-h6906m
 
