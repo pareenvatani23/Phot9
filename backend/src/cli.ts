@@ -8,9 +8,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { buildBackdrop } from "./backdrop.js";
-import { uploadToFal, runFalWithRetry, errMessage } from "./falClient.js";
+import { uploadToFal, runFalWithRetry } from "./falClient.js";
 import { limits } from "./config.js";
-import type { Sam3AlignOutput, Sam3BodyOutput } from "./types.js";
+import { projectPhotoOntoGLB } from "./texture.js";
+import type { Sam3BodyOutput } from "./types.js";
 
 const [imgPath, outDir] = process.argv.slice(2);
 if (!imgPath || !outDir) {
@@ -46,33 +47,30 @@ if (numPeople <= 0 || people.length === 0) {
 console.error("Stage B: backdrop …");
 const backdrop = await buildBackdrop(image, people, outDir);
 
-console.error("Stage C: fal-ai/sam-3/3d-align …");
-let heroUrl = body.model_glb.url;
-let aligned = false;
-try {
-  const align = await runFalWithRetry<Sam3AlignOutput>(
-    "fal-ai/sam-3/3d-align",
-    { image_url: imageUrl, body_mesh_url: body.model_glb.url, focal_length: people[0].focal_length },
-    { deadline }
-  );
-  const s = align.metadata?.scale_factor;
-  if (typeof s === "number" && Number.isFinite(s) && s > 0 && align.model_glb?.url) {
-    heroUrl = align.model_glb.url;
-    aligned = true;
-  } else {
-    console.error("align degenerate; using Stage A GLB");
-  }
-} catch (e) {
-  console.error("align failed; using Stage A GLB:", errMessage(e));
-}
+// Texture the RAW camera-space body GLB: projection only maps to the photo in
+// the original camera frame, so we deliberately skip 3d-align here (its MoGe
+// metric frame would break the projection). Vertex UVs survive any later
+// transform, and camera-space geometry also composites naturally with the photo.
+console.error("Downloading body GLB …");
+const res = await fetch(body.model_glb.url);
+if (!res.ok) throw new Error(`body download ${res.status}`);
+const bodyGlb = Buffer.from(await res.arrayBuffer());
 
-console.error("Downloading hero GLB …");
-const res = await fetch(heroUrl);
-if (!res.ok) throw new Error(`hero download ${res.status}`);
-await fs.writeFile(path.join(outDir, "hero.glb"), Buffer.from(await res.arrayBuffer()));
+console.error("Stage C': projecting photo onto mesh …");
+const heroPath = path.join(outDir, "hero.glb");
+const proj = await projectPhotoOntoGLB(
+  bodyGlb,
+  image,
+  { focalLength: people[0].focal_length, imgW: backdrop.img_w, imgH: backdrop.img_h },
+  heroPath
+);
+console.error("texture convention:", JSON.stringify(proj.convention), "coverage:", proj.coverage.toFixed(3));
 
 const meta = {
-  aligned,
+  aligned: false,
+  textured: true,
+  texture_convention: proj.convention,
+  texture_coverage: Number(proj.coverage.toFixed(3)),
   num_people: numPeople,
   img_w: backdrop.img_w,
   img_h: backdrop.img_h,
