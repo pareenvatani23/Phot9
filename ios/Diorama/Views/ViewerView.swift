@@ -81,6 +81,7 @@ struct ViewerView: View {
             controller = try DioramaSceneController(
                 heroGLB: assets.heroGLB,
                 backdropImage: assets.backdrop,
+                depthImage: nil,
                 hint: assets.result
             )
         } catch {

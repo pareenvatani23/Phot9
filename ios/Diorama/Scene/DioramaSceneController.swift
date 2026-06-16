@@ -5,6 +5,12 @@ import GLTFKit2
 /// Builds the SceneKit scene from the packaged assets and drives the bounded
 /// orbit camera (spec §3.3 / §3.4). The azimuth is HARD CLAMPED to a forward
 /// arc so the user never swings into the unphotographed rear of the people.
+///
+/// The opening frame reproduces the ORIGINAL PHOTO: the camera FOV is derived
+/// from SAM's focal length and the start distance from `avg_cam_tz`, so the
+/// people appear at the same size/position as in the photo (not zoomed out).
+/// When a depth map is supplied the background is a depth-displaced mesh
+/// (navigable parallax) instead of a flat billboard.
 final class DioramaSceneController: NSObject {
 
     // MARK: Orbit constants (spec §3.4)
@@ -12,17 +18,17 @@ final class DioramaSceneController: NSObject {
     private let maxAzimuth: Float =  1.221   //  +70°
     private let minElevation: Float = -0.20
     private let maxElevation: Float =  0.52
-    private let cameraFOV: CGFloat = 55       // vertical, degrees
     private let rubberBandZone: Float = 0.15
     private let rubberBandFactor: Float = 0.35
 
     // MARK: State
     private(set) var azimuth: Float = 0       // 0 = front (original photo viewpoint)
-    private var elevation: Float = 0.15
+    private var elevation: Float = 0
     private var orbitRadius: Float = 3
     private var minRadius: Float = 1.6
     private var maxRadius: Float = 4.0
     private var centroid = SCNVector3Zero     // people re-centered to origin
+    private var cameraFOVDeg: CGFloat = 55    // vertical, derived from focal length
 
     let scnView: SCNView
     private let scene = SCNScene()
@@ -35,18 +41,34 @@ final class DioramaSceneController: NSObject {
     // MARK: Init
 
     /// - Parameters:
-    ///   - heroGLB: local file URL of the hero GLB.
-    ///   - backdropImage: backdrop texture.
-    ///   - hint: scene hints from the backend (`avg_cam_tz`, aspect, etc.).
-    init(heroGLB: URL, backdropImage: UIImage, hint: DioramaResult) throws {
+    ///   - heroGLB: local file URL of the (textured) hero GLB.
+    ///   - backdropImage: backdrop photo texture.
+    ///   - depthImage: optional monocular depth map of the photo → depth-mesh background.
+    ///   - hint: backend hints (`focal_length`, `avg_cam_tz`, image size).
+    init(heroGLB: URL, backdropImage: UIImage, depthImage: UIImage?, hint: DioramaResult) throws {
         scnView = SCNView(frame: .zero)
         super.init()
 
+        let imgW = hint.backdrop.img_w
+        let imgH = hint.backdrop.img_h
+        let focal = Float(hint.scene_hint.focal_length)
+
+        // Vertical FOV of the original photo camera (pinhole): 2·atan((h/2)/f).
+        if focal > 1, imgH > 0 {
+            let fov = Double(2 * atan((Float(imgH) / 2) / focal) * 180 / .pi)
+            cameraFOVDeg = CGFloat(min(90, max(25, fov)))
+        }
+
         try buildPeople(from: heroGLB)
-        buildBackdrop(image: backdropImage,
-                      imgW: hint.backdrop.img_w,
-                      imgH: hint.backdrop.img_h,
-                      avgCamTz: Float(hint.scene_hint.avg_cam_tz))
+
+        // Start distance = real camera→subject distance, so the opening frame
+        // matches the photo. Zoom range brackets it.
+        let camDist = max(0.5, Float(hint.scene_hint.avg_cam_tz))
+        orbitRadius = camDist
+        minRadius = camDist * 0.45
+        maxRadius = camDist * 2.2
+
+        buildBackdrop(image: backdropImage, depth: depthImage, imgW: imgW, imgH: imgH)
         buildLightingAndFloor()
         buildCamera()
 
@@ -75,45 +97,111 @@ final class DioramaSceneController: NSObject {
         // Combined bounding box across all descendant geometry (spec §3.3).
         let (minV, maxV) = combinedBoundingBox(of: peopleNode) ?? (SCNVector3Zero, SCNVector3Zero)
         centroid = SCNVector3((minV.x + maxV.x) / 2, (minV.y + maxV.y) / 2, (minV.z + maxV.z) / 2)
-        let dx = maxV.x - minV.x, dy = maxV.y - minV.y, dz = maxV.z - minV.z
-        let radius = max(0.5, 0.5 * sqrtf(dx * dx + dy * dy + dz * dz))
 
-        // Re-center so the people centroid sits at world origin.
+        // Re-center so the people centroid sits at world origin (orbit pivot).
         peopleNode.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
         centroid = SCNVector3Zero
-
-        // Seed orbit radius (spec §3.4): radius * 2.5, clamped to [1.6r, 4r].
-        minRadius = radius * 1.6
-        maxRadius = radius * 4.0
-        orbitRadius = min(maxRadius, max(minRadius, radius * 2.5))
 
         scene.rootNode.addChildNode(peopleNode)
     }
 
-    // MARK: Backdrop (camera-facing plane)
+    // MARK: Backdrop (depth-mesh, or flat plane fallback)
 
-    private func buildBackdrop(image: UIImage, imgW: Int, imgH: Int, avgCamTz: Float) {
-        let backdropDistance = max(2.0, avgCamTz * 1.4)   // people sit in front of it (spec §3.3)
-
-        // Distance from the home camera (on +Z at orbitRadius) to the plane.
-        let camToPlane = orbitRadius + backdropDistance
-        let fovRad = Float(cameraFOV) * .pi / 180
-        let planeHeight = 2 * camToPlane * tanf(fovRad / 2)
+    private func buildBackdrop(image: UIImage, depth: UIImage?, imgW: Int, imgH: Int) {
         let aspect = imgH > 0 ? Float(imgW) / Float(imgH) : 1
+        // Sit the backdrop behind the people; far enough to read as background.
+        let backdropDistance = orbitRadius          // plane center at z = -orbitRadius
+        let camToPlane = orbitRadius + backdropDistance
+        let fovRad = Float(cameraFOVDeg) * .pi / 180
+        let planeHeight = 2 * camToPlane * tanf(fovRad / 2)
         let planeWidth = planeHeight * aspect
 
+        if let depth = depth,
+           let node = buildDepthMesh(image: image, depth: depth,
+                                     width: planeWidth, height: planeHeight,
+                                     baseZ: -backdropDistance,
+                                     depthAmount: orbitRadius * 0.6) {
+            scene.rootNode.addChildNode(node)
+            return
+        }
+
+        // Flat billboard fallback.
         let plane = SCNPlane(width: CGFloat(planeWidth), height: CGFloat(planeHeight))
         let mat = SCNMaterial()
         mat.diffuse.contents = image
-        mat.lightingModel = .constant      // backdrop is fully lit (a photo), not shaded
+        mat.lightingModel = .constant
         mat.isDoubleSided = true
         plane.firstMaterial = mat
-
         let node = SCNNode(geometry: plane)
-        // Fixed billboard at the rear; it does NOT follow the camera so parallax
-        // reads correctly between people and background (spec §3.3).
         node.position = SCNVector3(0, 0, -backdropDistance)
         scene.rootNode.addChildNode(node)
+    }
+
+    /// Tessellated grid textured with the photo and displaced along Z by the
+    /// depth map (brighter = nearer, per Depth-Anything-style inverse depth), so
+    /// the background has real parallax when the camera orbits.
+    private func buildDepthMesh(image: UIImage, depth: UIImage, width: Float, height: Float,
+                                baseZ: Float, depthAmount: Float) -> SCNNode? {
+        guard let d = sampleGray(depth) else { return nil }
+        let cols = 128
+        let rows = max(2, Int((Float(cols) / max(0.1, width / height)).rounded()))
+
+        var verts = [SCNVector3]()
+        var uvs = [CGPoint]()
+        verts.reserveCapacity(cols * rows)
+        uvs.reserveCapacity(cols * rows)
+
+        for j in 0..<rows {
+            let v = Float(j) / Float(rows - 1)      // 0 at top
+            for i in 0..<cols {
+                let u = Float(i) / Float(cols - 1)
+                let px = min(d.w - 1, Int(u * Float(d.w - 1)))
+                let py = min(d.h - 1, Int(v * Float(d.h - 1)))
+                let norm = Float(d.data[py * d.w + px]) / 255.0   // 1 = near, 0 = far
+                let x = (u - 0.5) * width
+                let y = (0.5 - v) * height
+                let z = baseZ - (1 - norm) * depthAmount          // far pixels pushed back
+                verts.append(SCNVector3(x, y, z))
+                uvs.append(CGPoint(x: CGFloat(u), y: CGFloat(1 - v)))  // texcoord origin bottom-left
+            }
+        }
+
+        var idx = [Int32]()
+        idx.reserveCapacity((cols - 1) * (rows - 1) * 6)
+        for j in 0..<(rows - 1) {
+            for i in 0..<(cols - 1) {
+                let a = Int32(j * cols + i)
+                let b = a + 1
+                let c = a + Int32(cols)
+                let e = c + 1
+                idx += [a, c, b, b, c, e]
+            }
+        }
+
+        let vSource = SCNGeometrySource(vertices: verts)
+        let tSource = SCNGeometrySource(textureCoordinates: uvs)
+        let element = SCNGeometryElement(indices: idx, primitiveType: .triangles)
+        let geo = SCNGeometry(sources: [vSource, tSource], elements: [element])
+        let mat = SCNMaterial()
+        mat.diffuse.contents = image
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        geo.firstMaterial = mat
+        return SCNNode(geometry: geo)
+    }
+
+    /// Decode an image to an 8-bit grayscale buffer.
+    private func sampleGray(_ img: UIImage) -> (w: Int, h: Int, data: [UInt8])? {
+        guard let cg = img.cgImage else { return nil }
+        let w = cg.width, h = cg.height
+        guard w > 0, h > 0 else { return nil }
+        var data = [UInt8](repeating: 0, count: w * h)
+        let cs = CGColorSpaceCreateDeviceGray()
+        guard let ctx = CGContext(data: &data, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return (w, h, data)
     }
 
     // MARK: Lighting + ground shadow
@@ -121,43 +209,28 @@ final class DioramaSceneController: NSObject {
     private func buildLightingAndFloor() {
         let ambient = SCNLight()
         ambient.type = .ambient
-        ambient.intensity = 400
+        ambient.intensity = 500
         let ambientNode = SCNNode()
         ambientNode.light = ambient
         scene.rootNode.addChildNode(ambientNode)
 
         let directional = SCNLight()
         directional.type = .directional
-        directional.intensity = 700
-        directional.castsShadow = true
-        directional.shadowMode = .deferred
+        directional.intensity = 650
         let dirNode = SCNNode()
         dirNode.light = directional
         dirNode.eulerAngles = SCNVector3(-Float.pi / 3, Float.pi / 6, 0) // front-top
         scene.rootNode.addChildNode(dirNode)
-
-        // Soft ground shadow so the people read as standing in a space.
-        let floor = SCNFloor()
-        floor.reflectivity = 0
-        let floorMat = SCNMaterial()
-        floorMat.diffuse.contents = UIColor(white: 0.05, alpha: 1)
-        floorMat.lightingModel = .lambert
-        floor.firstMaterial = floorMat
-        let floorNode = SCNNode(geometry: floor)
-        // Drop the floor to the feet: bottom of the (re-centered) people bbox.
-        let (minV, _) = combinedBoundingBox(of: peopleNode) ?? (SCNVector3Zero, SCNVector3Zero)
-        floorNode.position = SCNVector3(0, minV.y, 0)
-        scene.rootNode.addChildNode(floorNode)
     }
 
     // MARK: Camera
 
     private func buildCamera() {
         let camera = SCNCamera()
-        camera.fieldOfView = cameraFOV
+        camera.fieldOfView = cameraFOVDeg
         camera.projectionDirection = .vertical
         camera.zNear = 0.05
-        camera.zFar = 1000
+        camera.zFar = 5000
         cameraNode.camera = camera
         scene.rootNode.addChildNode(cameraNode)
     }
@@ -191,7 +264,6 @@ final class DioramaSceneController: NSObject {
         var dAz = Float(-dxTranslation) * 0.005
         var dEl = Float(-dyTranslation) * 0.005
 
-        // Rubber-band: resist near the azimuth clamp instead of stopping dead.
         if (azimuth > maxAzimuth - rubberBandZone && dAz > 0) ||
            (azimuth < minAzimuth + rubberBandZone && dAz < 0) {
             dAz *= rubberBandFactor
@@ -222,7 +294,7 @@ final class DioramaSceneController: NSObject {
 
     func resetToFront() {
         azimuth = 0
-        elevation = 0.15
+        elevation = 0
         updateCamera()
     }
 

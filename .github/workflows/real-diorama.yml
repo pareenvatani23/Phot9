@@ -108,7 +108,7 @@ jobs:
           [ -f demo/real-orbit.mp4 ] || [ -f demo/real-screenshot.png ] || { echo "no media"; exit 0; }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f demo/real-orbit.mp4 demo/real-screenshot.png demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg 2>/dev/null || true
+          git add -f demo/real-orbit.mp4 demo/real-screenshot.png demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg demo/real/depth.png 2>/dev/null || true
           git commit -m "CI: real diorama orbit video from demo/input.jpg" || { echo "nothing to commit"; exit 0; }
           git push origin HEAD:claude/diorama-build-spec-h6906m
 

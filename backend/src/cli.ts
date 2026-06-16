@@ -8,10 +8,21 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { buildBackdrop } from "./backdrop.js";
-import { uploadToFal, runFalWithRetry } from "./falClient.js";
+import { uploadToFal, runFal, runFalWithRetry, errMessage } from "./falClient.js";
 import { limits } from "./config.js";
 import { projectPhotoOntoGLB } from "./texture.js";
 import type { Sam3BodyOutput } from "./types.js";
+
+/** Pull the first File URL out of an arbitrary fal output shape. */
+function extractFileUrl(out: unknown): string | undefined {
+  const o = out as Record<string, any>;
+  const cand = [o?.image, o?.depth, o?.depth_map, o?.output, o?.images?.[0], o?.image_url];
+  for (const c of cand) {
+    if (typeof c === "string") return c;
+    if (c && typeof c.url === "string") return c.url;
+  }
+  return undefined;
+}
 
 const [imgPath, outDir] = process.argv.slice(2);
 if (!imgPath || !outDir) {
@@ -66,9 +77,34 @@ const proj = await projectPhotoOntoGLB(
 );
 console.error("texture convention:", JSON.stringify(proj.convention), "coverage:", proj.coverage.toFixed(3));
 
+// Stage B': best-effort monocular depth for the navigable depth-mesh background.
+// Non-fatal — if no model works, the app falls back to a flat backdrop plane.
+let depthAvailable = false;
+const depthModels = ["fal-ai/imageutils/marigold-depth", "fal-ai/depth-anything/v2"];
+for (const m of depthModels) {
+  try {
+    console.error("Depth: trying", m, "…");
+    const out = await runFal<unknown>(m, { image_url: imageUrl }, { deadline });
+    const url = extractFileUrl(out);
+    if (url) {
+      const r = await fetch(url);
+      if (r.ok) {
+        await fs.writeFile(path.join(outDir, "depth.png"), Buffer.from(await r.arrayBuffer()));
+        depthAvailable = true;
+        console.error("Depth OK from", m);
+        break;
+      }
+    }
+    console.error("Depth: no usable file from", m);
+  } catch (e) {
+    console.error("Depth model failed", m, errMessage(e));
+  }
+}
+
 const meta = {
   aligned: false,
   textured: true,
+  depth_available: depthAvailable,
   texture_convention: proj.convention,
   texture_coverage: Number(proj.coverage.toFixed(3)),
   num_people: numPeople,
