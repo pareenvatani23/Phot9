@@ -80,7 +80,9 @@ final class DioramaSceneController: NSObject {
         buildCamera()
 
         scnView.scene = scene
-        scnView.backgroundColor = .black
+        // Fill empty space (revealed when orbiting past the splat edges) with the
+        // photo's sky tone rather than black, so the void is far less jarring.
+        scnView.backgroundColor = Self.skyColor(from: backdropImage)
         scnView.antialiasingMode = .multisampling4X
         scnView.allowsCameraControl = false   // custom orbit only — never the default
 
@@ -260,6 +262,26 @@ final class DioramaSceneController: NSObject {
         return SCNNode(geometry: geo)
     }
 
+    /// Average color of the photo's top quarter (its sky), used as the scene
+    /// background so off-axis voids blend instead of showing black.
+    private static func skyColor(from image: UIImage) -> UIColor {
+        guard let cg = image.cgImage else { return UIColor(white: 0.85, alpha: 1) }
+        let topH = max(1, cg.height / 4)
+        guard let top = cg.cropping(to: CGRect(x: 0, y: 0, width: cg.width, height: topH)) else {
+            return UIColor(white: 0.85, alpha: 1)
+        }
+        var px = [UInt8](repeating: 0, count: 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8,
+                                  bytesPerRow: 4, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return UIColor(white: 0.85, alpha: 1)
+        }
+        ctx.draw(top, in: CGRect(x: 0, y: 0, width: 1, height: 1)) // averages the strip to 1px
+        return UIColor(red: CGFloat(px[0]) / 255, green: CGFloat(px[1]) / 255,
+                       blue: CGFloat(px[2]) / 255, alpha: 1)
+    }
+
     // MARK: Lighting + ground shadow
 
     private func buildLightingAndFloor() {
@@ -381,7 +403,9 @@ final class DioramaSceneController: NSObject {
     @objc private func stepAutoOrbit() {
         let t = CACurrentMediaTime() - autoStart
         let phase = sin(2 * Double.pi * t / autoPeriod) // -1...1
-        setAzimuth(Float(phase) * 0.9)
+        // ±0.45 rad (~26°): enough parallax to read as 3D, but stays in the
+        // frontal zone where the single-view splat doesn't reveal its flatness.
+        setAzimuth(Float(phase) * 0.45)
     }
 
     // MARK: Bounding box helper
