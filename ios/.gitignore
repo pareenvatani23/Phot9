@@ -1,0 +1,13 @@
+# XcodeGen output (regenerate with `xcodegen generate`)
+*.xcodeproj
+*.xcworkspace
+
+# Xcode / SPM
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+Package.resolved
+
+.DS_Store

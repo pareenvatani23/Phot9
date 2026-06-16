@@ -1,0 +1,31 @@
+{
+  "name": "diorama-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Backend proxy + pipeline for Diorama (group photo -> explorable 3D diorama).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fal-ai/client": "^1.6.2",
+    "express": "^4.21.2",
+    "multer": "^2.2.0",
+    "sharp": "^0.33.5",
+    "uuid": "^11.0.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

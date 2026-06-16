@@ -1,0 +1,43 @@
+# XcodeGen project definition.
+#   brew install xcodegen
+#   cd ios && xcodegen generate && open Diorama.xcodeproj
+#
+# Why XcodeGen: it wires the GLTFKit2 SPM dependency reproducibly without a
+# hand-edited .pbxproj. Pin GLTFKit2 to a release tag for production builds.
+name: Diorama
+options:
+  bundleIdPrefix: com.phot9.diorama
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  GLTFKit2:
+    url: https://github.com/warrenm/GLTFKit2
+    branch: master   # pin to a tag (e.g. `version: 0.5.10`) for production
+
+targets:
+  Diorama:
+    type: application
+    platform: iOS
+    sources:
+      - path: Diorama
+    dependencies:
+      - package: GLTFKit2
+    info:
+      path: Diorama/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Diorama
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSCameraUsageDescription: "Diorama uses the camera to capture a group photo and turn it into an explorable 3D scene."
+        NSPhotoLibraryAddUsageDescription: "Diorama saves your orbit videos to your photo library."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.phot9.diorama
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
