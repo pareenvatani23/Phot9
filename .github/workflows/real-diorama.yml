@@ -99,20 +99,8 @@ jobs:
           for i in $(seq 1 90); do kill -0 "$REC" 2>/dev/null || break; sleep 1; done
           kill -9 "$REC" 2>/dev/null || true
           xcrun simctl io "$UDID" screenshot ../demo/real-screenshot.png
-          # Sanity-check the mp4 actually has a moov atom before publishing.
-          python3 - <<'PY'
-import struct,sys
-b=open("../demo/real-orbit.mp4","rb").read()
-off=0; types=[]
-while off+8<=len(b):
-    size=struct.unpack('>I',b[off:off+4])[0]; typ=b[off+4:off+8]
-    if size==1: size=struct.unpack('>Q',b[off+8:off+16])[0]
-    types.append(typ);
-    if size==0: break
-    off+=size if size>=8 else len(b)
-print("atoms:", [t.decode('latin1','replace') for t in types])
-print("HAS_MOOV:", b'moov' in types, "size:", len(b))
-PY
+          # Sanity-check the mp4 has a moov atom (index) before publishing.
+          python3 -c "import sys;b=open('../demo/real-orbit.mp4','rb').read();print('HAS_MOOV:', b'moov' in b, 'size:', len(b))"
           ls -la ../demo/real-orbit.mp4 ../demo/real-screenshot.png
           true
 
