@@ -102,18 +102,21 @@ jobs:
           ls -la ../demo/real-orbit.mp4 ../demo/real-screenshot.png
           true
 
-      - name: Publish results to branch
+      - name: Publish results to ci-media branch
         if: always()
         run: |
           [ -f demo/real-orbit.mp4 ] || [ -f demo/real-screenshot.png ] || { echo "no media"; exit 0; }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f demo/real-orbit.mp4 demo/real-screenshot.png demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg demo/real/depth.png 2>/dev/null || true
-          git commit -m "CI: real diorama orbit video from demo/input.jpg" || { echo "nothing to commit"; exit 0; }
-          # Race-safe push: another workflow may have advanced the branch.
+          # Force-push the media to a DEDICATED orphan branch — never conflicts,
+          # never races with other workflows pushing the feature branch.
+          git checkout --orphan ci-media
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f demo/real-orbit.mp4 demo/real-screenshot.png \
+            demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg demo/real/depth.png 2>/dev/null || true
+          git commit -m "CI media $(date -u +%FT%TZ)"
           for i in 1 2 3 4 5; do
-            git pull --rebase --autostash origin claude/diorama-build-spec-h6906m \
-              && git push origin HEAD:claude/diorama-build-spec-h6906m && { echo "pushed"; break; }
+            git push -f origin ci-media && { echo "pushed ci-media"; break; }
             echo "push retry $i"; sleep 4
           done
 
