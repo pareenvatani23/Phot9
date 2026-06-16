@@ -11,6 +11,7 @@ import { buildBackdrop } from "./backdrop.js";
 import { uploadToFal, runFal, runFalWithRetry, errMessage } from "./falClient.js";
 import { limits } from "./config.js";
 import { projectPhotoOntoGLB } from "./texture.js";
+import { buildSplat } from "./splat.js";
 import type { Sam3BodyOutput } from "./types.js";
 
 /** Pull the first File URL out of an arbitrary fal output shape. */
@@ -101,10 +102,31 @@ for (const m of depthModels) {
   }
 }
 
+// Stage B'': single-image Gaussian-splat environment from the depth map.
+let splatAvailable = false;
+if (depthAvailable) {
+  try {
+    const depthBuf = await fs.readFile(path.join(outDir, "depth.png"));
+    const splat = await buildSplat(image, depthBuf, {
+      focalLength: people[0].focal_length,
+      imgW: backdrop.img_w,
+      imgH: backdrop.img_h,
+      avgCamTz: people.reduce((s, p) => s + (p.pred_cam_t?.[2] ?? 0), 0) / people.length,
+      maxPoints: 500_000,
+    });
+    await fs.writeFile(path.join(outDir, "scene.splat"), splat);
+    splatAvailable = true;
+    console.error("Splat OK:", splat.length / 32, "gaussians");
+  } catch (e) {
+    console.error("Splat build failed:", errMessage(e));
+  }
+}
+
 const meta = {
   aligned: false,
   textured: true,
   depth_available: depthAvailable,
+  splat_available: splatAvailable,
   texture_convention: proj.convention,
   texture_coverage: Number(proj.coverage.toFixed(3)),
   num_people: numPeople,

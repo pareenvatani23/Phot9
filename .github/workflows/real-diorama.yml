@@ -124,7 +124,8 @@ jobs:
           git checkout --orphan ci-media
           git rm -rf --cached . >/dev/null 2>&1 || true
           git add -f demo/real-orbit.mp4 demo/real-screenshot.png \
-            demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg demo/real/depth.png 2>/dev/null || true
+            demo/real/meta.json demo/real/hero.glb demo/real/backdrop.jpg \
+            demo/real/depth.png demo/real/scene.splat 2>/dev/null || true
           git commit -m "CI media $(date -u +%FT%TZ)"
           for i in 1 2 3 4 5; do
             git push -f origin ci-media && { echo "pushed ci-media"; break; }

@@ -20,6 +20,7 @@ struct DemoView: View {
         let avg_cam_tz: Double
         let focal_length: Double
         let depth_available: Bool?
+        let splat_available: Bool?
     }
 
     var body: some View {
@@ -62,11 +63,17 @@ struct DemoView: View {
             // Pull the real camera metadata so the opening frame matches the photo.
             let meta = await fetchMeta(base.appendingPathComponent("meta.json"))
 
-            // Depth-mesh background is temporarily disabled (texcoord/displacement
-            // needs calibration — it renders flipped/warped). Flat backdrop for now;
-            // re-enable with `-DioramaDepth 1` once fixed.
+            // Gaussian-splat environment (preferred navigable background).
+            var splatData: Data?
+            if meta?.splat_available == true {
+                if let splatFile = try? await api.download(base.appendingPathComponent("scene.splat"), suggestedName: "scene.splat") {
+                    splatData = try? Data(contentsOf: splatFile)
+                }
+            }
+
+            // Depth-mesh fallback only if explicitly requested and no splat.
             var depthImage: UIImage?
-            if UserDefaults.standard.bool(forKey: "DioramaDepth"), meta?.depth_available == true {
+            if splatData == nil, UserDefaults.standard.bool(forKey: "DioramaDepth"), meta?.depth_available == true {
                 if let depthFile = try? await api.download(base.appendingPathComponent("depth.png"), suggestedName: "depth.png") {
                     depthImage = UIImage(contentsOfFile: depthFile.path)
                 }
@@ -85,7 +92,7 @@ struct DemoView: View {
             )
 
             let ctrl = try DioramaSceneController(heroGLB: glb, backdropImage: image,
-                                                  depthImage: depthImage, hint: hint)
+                                                  depthImage: depthImage, splatData: splatData, hint: hint)
             await MainActor.run {
                 controller = ctrl
                 ctrl.startAutoOrbit(period: 6)

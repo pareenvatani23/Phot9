@@ -28,6 +28,7 @@ final class DioramaSceneController: NSObject {
     private var minRadius: Float = 1.6
     private var maxRadius: Float = 4.0
     private var centroid = SCNVector3Zero     // people re-centered to origin
+    private var worldOffset = SCNVector3Zero  // -original centroid; applied to splat to keep alignment
     private var cameraFOVDeg: CGFloat = 55    // vertical, derived from focal length
 
     let scnView: SCNView
@@ -45,7 +46,7 @@ final class DioramaSceneController: NSObject {
     ///   - backdropImage: backdrop photo texture.
     ///   - depthImage: optional monocular depth map of the photo → depth-mesh background.
     ///   - hint: backend hints (`focal_length`, `avg_cam_tz`, image size).
-    init(heroGLB: URL, backdropImage: UIImage, depthImage: UIImage?, hint: DioramaResult) throws {
+    init(heroGLB: URL, backdropImage: UIImage, depthImage: UIImage?, splatData: Data? = nil, hint: DioramaResult) throws {
         scnView = SCNView(frame: .zero)
         super.init()
 
@@ -68,7 +69,13 @@ final class DioramaSceneController: NSObject {
         minRadius = camDist * 0.45
         maxRadius = camDist * 2.2
 
-        buildBackdrop(image: backdropImage, depth: depthImage, imgW: imgW, imgH: imgH)
+        // Prefer the Gaussian-splat environment (navigable 3D); else depth-mesh / flat plane.
+        if let splatData, let cloud = buildSplatCloud(from: splatData) {
+            cloud.position = worldOffset   // align with the re-centered people
+            scene.rootNode.addChildNode(cloud)
+        } else {
+            buildBackdrop(image: backdropImage, depth: depthImage, imgW: imgW, imgH: imgH)
+        }
         buildLightingAndFloor()
         buildCamera()
 
@@ -99,7 +106,8 @@ final class DioramaSceneController: NSObject {
         centroid = SCNVector3((minV.x + maxV.x) / 2, (minV.y + maxV.y) / 2, (minV.z + maxV.z) / 2)
 
         // Re-center so the people centroid sits at world origin (orbit pivot).
-        peopleNode.position = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        worldOffset = SCNVector3(-centroid.x, -centroid.y, -centroid.z)
+        peopleNode.position = worldOffset
         centroid = SCNVector3Zero
 
         scene.rootNode.addChildNode(peopleNode)
@@ -202,6 +210,54 @@ final class DioramaSceneController: NSObject {
                                   bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         return (w, h, data)
+    }
+
+    // MARK: Gaussian-splat environment (rendered as a SceneKit point cloud)
+
+    /// Parse the compact `.splat` records (32 bytes: pos 3×f32, scale 3×f32,
+    /// color RGBA u8, rot 4×u8) into a colored SceneKit point cloud that
+    /// composites with the people meshes under the shared orbit camera.
+    private func buildSplatCloud(from data: Data) -> SCNNode? {
+        let recordSize = 32
+        let n = data.count / recordSize
+        guard n > 0 else { return nil }
+
+        var positions = [SCNVector3](); positions.reserveCapacity(n)
+        var colors = [Float](); colors.reserveCapacity(n * 4)
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            for i in 0..<n {
+                let base = i * recordSize
+                let x = raw.loadUnaligned(fromByteOffset: base, as: Float32.self)
+                let y = raw.loadUnaligned(fromByteOffset: base + 4, as: Float32.self)
+                let z = raw.loadUnaligned(fromByteOffset: base + 8, as: Float32.self)
+                positions.append(SCNVector3(x, y, z))
+                colors.append(Float(raw[base + 24]) / 255)
+                colors.append(Float(raw[base + 25]) / 255)
+                colors.append(Float(raw[base + 26]) / 255)
+                colors.append(Float(raw[base + 27]) / 255)
+            }
+        }
+
+        let vSource = SCNGeometrySource(vertices: positions)
+        let colorData = colors.withUnsafeBytes { Data($0) }
+        let cSource = SCNGeometrySource(
+            data: colorData, semantic: .color, vectorCount: n,
+            usesFloatComponents: true, componentsPerVector: 4,
+            bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0,
+            dataStride: MemoryLayout<Float>.size * 4)
+
+        let indices = [Int32](0..<Int32(n))
+        let element = SCNGeometryElement(indices: indices, primitiveType: .point)
+        element.minimumPointScreenSpaceRadius = 3
+        element.maximumPointScreenSpaceRadius = 10
+        element.pointSize = 7
+
+        let geo = SCNGeometry(sources: [vSource, cSource], elements: [element])
+        let mat = SCNMaterial()
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        geo.firstMaterial = mat
+        return SCNNode(geometry: geo)
     }
 
     // MARK: Lighting + ground shadow
