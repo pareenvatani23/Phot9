@@ -28,6 +28,10 @@ targets:
       path: Diorama/Resources/Info.plist
       properties:
         CFBundleDisplayName: Diorama
+        # Allow http to localhost/loopback so the app can talk to a local
+        # backend (dev) and load demo assets from a runner-local server (CI).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

@@ -4,6 +4,11 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>Diorama</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Diorama uses the camera to capture a group photo and turn it into an explorable 3D scene.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

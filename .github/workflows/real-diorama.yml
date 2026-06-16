@@ -1,0 +1,116 @@
+name: Real Diorama (fal pipeline + orbit video)
+
+# Runs the FULL pipeline on a runner that can reach fal: processes demo/input.jpg
+# through fal-ai/sam-3, then loads the resulting multi-person GLB + backdrop into
+# the iOS Simulator and records the bounded-orbit video.
+#
+# Trigger manually (workflow_dispatch) and pass the fal key as input. The key is
+# masked in logs and never committed.
+on:
+  workflow_dispatch:
+    inputs:
+      fal_key:
+        description: "fal API key (id:secret)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  diorama:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      FAL_KEY: ${{ inputs.fal_key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask key
+        run: echo "::add-mask::${{ inputs.fal_key }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run fal pipeline on demo/input.jpg
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+          node dist/cli.js ../demo/input.jpg ../demo/real
+          echo "--- produced ---"
+          ls -la ../demo/real
+
+      - name: Serve produced assets locally
+        run: |
+          nohup python3 -m http.server 8765 --directory demo/real >/tmp/http.log 2>&1 &
+          sleep 1
+          curl -sI http://localhost:8765/hero.glb | head -1 || true
+          curl -sI http://localhost:8765/backdrop.jpg | head -1 || true
+
+      - name: Install XcodeGen & generate project
+        working-directory: ios
+        run: brew install xcodegen && xcodegen generate
+
+      - name: Pick a simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.name|test("iPhone"))] | .[0].udid')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Build for Simulator
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -project Diorama.xcodeproj -scheme Diorama -configuration Debug \
+            -destination "id=${{ steps.sim.outputs.udid }}" -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee ../real-build.log
+
+      - name: Launch real diorama & record video
+        working-directory: ios
+        run: |
+          set +e
+          UDID="${{ steps.sim.outputs.udid }}"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          APP=$(find build/Build/Products -name "Diorama.app" -type d | head -1)
+          xcrun simctl install "$UDID" "$APP"
+
+          # Point demo mode at the real reconstructed assets served locally.
+          xcrun simctl launch "$UDID" com.phot9.diorama -DioramaDemo 1 \
+            -DioramaDemoGLB http://localhost:8765/hero.glb \
+            -DioramaDemoBackdrop http://localhost:8765/backdrop.jpg
+
+          sleep 16   # download assets + build scene + start orbit
+          xcrun simctl io "$UDID" recordVideo --codec=h264 --force ../demo/real-orbit.mp4 &
+          REC=$!
+          sleep 12
+          kill -INT "$REC" 2>/dev/null
+          for i in $(seq 1 15); do kill -0 "$REC" 2>/dev/null || break; sleep 1; done
+          kill -9 "$REC" 2>/dev/null
+          xcrun simctl io "$UDID" screenshot ../demo/real-screenshot.png
+          ls -la ../demo/real-orbit.mp4 ../demo/real-screenshot.png
+          true
+
+      - name: Publish results to branch
+        if: always()
+        run: |
+          [ -f demo/real-orbit.mp4 ] || [ -f demo/real-screenshot.png ] || { echo "no media"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f demo/real-orbit.mp4 demo/real-screenshot.png demo/real/meta.json 2>/dev/null || true
+          git commit -m "CI: real diorama orbit video from demo/input.jpg" || { echo "nothing to commit"; exit 0; }
+          git push origin HEAD:claude/diorama-build-spec-h6906m
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-diorama
+          path: |
+            demo/real-orbit.mp4
+            demo/real-screenshot.png
+            demo/real/meta.json
+            real-build.log
+          if-no-files-found: warn
