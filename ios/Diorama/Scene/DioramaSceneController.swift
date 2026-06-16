@@ -120,7 +120,7 @@ final class DioramaSceneController: NSObject {
            let node = buildDepthMesh(image: image, depth: depth,
                                      width: planeWidth, height: planeHeight,
                                      baseZ: -backdropDistance,
-                                     depthAmount: orbitRadius * 0.6) {
+                                     depthAmount: orbitRadius * 0.2) {
             scene.rootNode.addChildNode(node)
             return
         }
@@ -162,7 +162,7 @@ final class DioramaSceneController: NSObject {
                 let y = (0.5 - v) * height
                 let z = baseZ - (1 - norm) * depthAmount          // far pixels pushed back
                 verts.append(SCNVector3(x, y, z))
-                uvs.append(CGPoint(x: CGFloat(u), y: CGFloat(1 - v)))  // texcoord origin bottom-left
+                uvs.append(CGPoint(x: CGFloat(u), y: CGFloat(v)))      // upright (top vertex -> image top)
             }
         }
 

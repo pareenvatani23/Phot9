@@ -62,9 +62,11 @@ struct DemoView: View {
             // Pull the real camera metadata so the opening frame matches the photo.
             let meta = await fetchMeta(base.appendingPathComponent("meta.json"))
 
-            // Optional depth map → depth-mesh background.
+            // Depth-mesh background is temporarily disabled (texcoord/displacement
+            // needs calibration — it renders flipped/warped). Flat backdrop for now;
+            // re-enable with `-DioramaDepth 1` once fixed.
             var depthImage: UIImage?
-            if meta?.depth_available == true {
+            if UserDefaults.standard.bool(forKey: "DioramaDepth"), meta?.depth_available == true {
                 if let depthFile = try? await api.download(base.appendingPathComponent("depth.png"), suggestedName: "depth.png") {
                     depthImage = UIImage(contentsOfFile: depthFile.path)
                 }
