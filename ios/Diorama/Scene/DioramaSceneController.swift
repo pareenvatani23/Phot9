@@ -226,6 +226,36 @@ final class DioramaSceneController: NSObject {
         updateCamera()
     }
 
+    // MARK: Continuous auto-orbit (demo / preview)
+
+    private var autoLink: CADisplayLink?
+    private var autoStart: CFTimeInterval = 0
+    private var autoPeriod: Double = 6
+
+    /// Smoothly sweep the azimuth back and forth (±0.9 rad) forever, so an
+    /// on-screen recording shows the parallax. Drives the live SCNView.
+    func startAutoOrbit(period: Double = 6) {
+        stopAutoOrbit()
+        autoPeriod = period
+        autoStart = CACurrentMediaTime()
+        scnView.rendersContinuously = true
+        let link = CADisplayLink(target: self, selector: #selector(stepAutoOrbit))
+        link.add(to: .main, forMode: .common)
+        autoLink = link
+    }
+
+    func stopAutoOrbit() {
+        autoLink?.invalidate()
+        autoLink = nil
+        scnView.rendersContinuously = false
+    }
+
+    @objc private func stepAutoOrbit() {
+        let t = CACurrentMediaTime() - autoStart
+        let phase = sin(2 * Double.pi * t / autoPeriod) // -1...1
+        setAzimuth(Float(phase) * 0.9)
+    }
+
     // MARK: Bounding box helper
 
     /// Combined AABB of all descendant geometry, expressed in `root`'s space.

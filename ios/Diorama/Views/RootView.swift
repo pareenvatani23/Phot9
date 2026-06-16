@@ -20,6 +20,17 @@ struct RootView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            if AppConfig.demoMode {
+                DemoView()
+            } else {
+                content
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        ZStack {
             switch phase {
             case .capture:
                 CaptureView { jpeg in

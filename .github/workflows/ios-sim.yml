@@ -52,7 +52,16 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee ../ios-build.log
 
-      - name: Boot, install, launch
+      - name: Check sample asset reachability
+        if: success()
+        run: |
+          for u in \
+            "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CesiumMan/glTF-Binary/CesiumMan.glb" \
+            "https://picsum.photos/seed/diorama/1200/1600"; do
+            echo "HEAD $u"; curl -sIL -o /dev/null -w "  -> %{http_code}\n" "$u" || true
+          done
+
+      - name: Boot, install, launch demo, record video
         if: success()
         working-directory: ios
         run: |
@@ -62,9 +71,23 @@ jobs:
           APP=$(find build/Build/Products -name "Diorama.app" -type d | head -1)
           echo "App bundle: $APP"
           xcrun simctl install "$UDID" "$APP"
-          xcrun simctl launch "$UDID" com.phot9.diorama || true
-          sleep 8
+
+          # Launch straight into the auto-orbit demo (real GLB + real photo).
+          xcrun simctl launch "$UDID" com.phot9.diorama -DioramaDemo 1 || true
+
+          # Give it time to download the sample assets, build the scene, and
+          # start orbiting before we record.
+          sleep 12
+
+          # Record ~12 s of the live auto-orbit.
+          xcrun simctl io "$UDID" recordVideo --codec=h264 --force ../ios-orbit.mp4 &
+          REC=$!
+          sleep 12
+          kill -INT "$REC" 2>/dev/null || true
+          wait "$REC" 2>/dev/null || true
+
           xcrun simctl io "$UDID" screenshot ../ios-screenshot.png || true
+          ls -la ../ios-orbit.mp4 ../ios-screenshot.png || true
 
       - name: Upload artifacts
         if: always()
@@ -72,6 +95,7 @@ jobs:
         with:
           name: ios-simulator
           path: |
+            ios-orbit.mp4
             ios-screenshot.png
             ios-build.log
           if-no-files-found: warn
