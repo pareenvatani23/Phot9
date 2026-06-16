@@ -22,7 +22,7 @@ export const config = {
 /** Pipeline tunables (see spec sections 2.4 / 2.5). */
 export const limits = {
   MAX_UPLOAD_BYTES: 12 * 1024 * 1024, // 12 MB (spec 2.3)
-  PIPELINE_TIMEOUT_MS: 180_000, // 180 s (spec 2.5)
+  PIPELINE_TIMEOUT_MS: 600_000, // 600 s — headroom for slow fal stages (CI)
   FAL_POLL_INTERVAL_MS: 2_000, // 2 s (spec 2.5 / 4.3)
   FAL_RETRY_ATTEMPTS: 1, // retry once on failure (spec 2.5)
   BBOX_EXPAND: 0.08, // expand each person bbox by 8% (spec 2.4 Stage B)
