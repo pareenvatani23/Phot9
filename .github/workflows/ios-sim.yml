@@ -8,6 +8,9 @@ on:
     paths: [ "ios/**", ".github/workflows/ios-sim.yml" ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # to publish the recorded demo media back to the branch
+
 jobs:
   build:
     # macos-15 ships Xcode 16, which reads XcodeGen's objectVersion-77 project
@@ -65,29 +68,47 @@ jobs:
         if: success()
         working-directory: ios
         run: |
+          set +e   # never let a transient simctl error or signal hang the step
           UDID="${{ steps.sim.outputs.udid }}"
-          xcrun simctl boot "$UDID" || true
-          xcrun simctl bootstatus "$UDID" -b || true
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
           APP=$(find build/Build/Products -name "Diorama.app" -type d | head -1)
           echo "App bundle: $APP"
           xcrun simctl install "$UDID" "$APP"
 
           # Launch straight into the auto-orbit demo (real GLB + real photo).
-          xcrun simctl launch "$UDID" com.phot9.diorama -DioramaDemo 1 || true
+          xcrun simctl launch "$UDID" com.phot9.diorama -DioramaDemo 1
 
-          # Give it time to download the sample assets, build the scene, and
-          # start orbiting before we record.
-          sleep 12
+          # Allow time to download sample assets, build the scene, and start
+          # orbiting before recording.
+          sleep 14
 
-          # Record ~12 s of the live auto-orbit.
+          # Record ~12 s of the live auto-orbit. Stop with SIGINT (which finalizes
+          # the mp4), bounded by a kill loop so the step can never block.
           xcrun simctl io "$UDID" recordVideo --codec=h264 --force ../ios-orbit.mp4 &
           REC=$!
           sleep 12
-          kill -INT "$REC" 2>/dev/null || true
-          wait "$REC" 2>/dev/null || true
+          kill -INT "$REC" 2>/dev/null
+          for i in $(seq 1 15); do kill -0 "$REC" 2>/dev/null || break; sleep 1; done
+          kill -9 "$REC" 2>/dev/null
 
-          xcrun simctl io "$UDID" screenshot ../ios-screenshot.png || true
-          ls -la ../ios-orbit.mp4 ../ios-screenshot.png || true
+          xcrun simctl io "$UDID" screenshot ../ios-screenshot.png
+          ls -la ../ios-orbit.mp4 ../ios-screenshot.png
+          true
+
+      - name: Publish demo media to branch
+        if: always()
+        run: |
+          set -e
+          [ -f ios-orbit.mp4 ] || [ -f ios-screenshot.png ] || { echo "no media"; exit 0; }
+          mkdir -p demo
+          cp -f ios-orbit.mp4 demo/ 2>/dev/null || true
+          cp -f ios-screenshot.png demo/ 2>/dev/null || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f demo/ios-orbit.mp4 demo/ios-screenshot.png 2>/dev/null || true
+          git commit -m "CI: publish demo orbit video + screenshot" || { echo "nothing to commit"; exit 0; }
+          git push origin HEAD:claude/diorama-build-spec-h6906m
 
       - name: Upload artifacts
         if: always()
