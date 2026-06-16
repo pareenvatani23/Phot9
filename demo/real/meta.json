@@ -1,0 +1,16 @@
+{
+  "aligned": false,
+  "textured": true,
+  "depth_available": true,
+  "splat_available": true,
+  "texture_convention": {
+    "flipY": true,
+    "flipZ": true
+  },
+  "texture_coverage": 1,
+  "num_people": 5,
+  "img_w": 1000,
+  "img_h": 667,
+  "avg_cam_tz": 9.568679999999999,
+  "focal_length": 571.76
+}
