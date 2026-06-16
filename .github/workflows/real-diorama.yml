@@ -71,7 +71,7 @@ jobs:
           set -o pipefail
           xcodebuild -project Diorama.xcodeproj -scheme Diorama -configuration Debug \
             -destination "id=${{ steps.sim.outputs.udid }}" -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee ../real-build.log
+            -quiet CODE_SIGNING_ALLOWED=NO build 2>&1 | tee ../real-build.log
 
       - name: Launch real diorama & record video
         working-directory: ios
@@ -92,18 +92,21 @@ jobs:
           xcrun simctl io "$UDID" recordVideo --codec=h264 --force ../demo/real-orbit.mp4 &
           REC=$!
           sleep 12
-          # Stop with SIGINT and let simctl FINALIZE the moov atom. Do NOT kill -9
-          # early; that truncates the file (missing moov => unplayable). Wait up
-          # to 90 s for a clean exit; only force-kill as an absolute last resort.
+          # Stop with SIGINT and WAIT for simctl to finalize the moov atom.
+          # Heavier scenes (depth-mesh) take longer to flush; a premature kill -9
+          # truncates the file (missing moov => unplayable). Block up to 240 s.
           kill -INT "$REC" 2>/dev/null
-          for i in $(seq 1 90); do kill -0 "$REC" 2>/dev/null || break; sleep 1; done
+          for i in $(seq 1 240); do kill -0 "$REC" 2>/dev/null || break; sleep 1; done
           kill -9 "$REC" 2>/dev/null || true
           xcrun simctl io "$UDID" screenshot ../demo/real-screenshot.png
           ls -la ../demo/real-orbit.mp4 ../demo/real-screenshot.png
-          true
+          # Fail loudly if the mp4 has no moov atom, so we never publish a broken video.
+          if ! python3 -c "import sys;b=open('../demo/real-orbit.mp4','rb').read();ok=b'moov' in b;print('HAS_MOOV',ok,'size',len(b));sys.exit(0 if ok else 1)"; then
+            echo "ERROR: recorded video has no moov atom (truncated)"; exit 1
+          fi
 
       - name: Publish results to ci-media branch
-        if: always()
+        if: success()
         run: |
           [ -f demo/real-orbit.mp4 ] || [ -f demo/real-screenshot.png ] || { echo "no media"; exit 0; }
           git config user.name "github-actions[bot]"
