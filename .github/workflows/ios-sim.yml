@@ -1,0 +1,75 @@
+name: iOS Simulator Build
+
+# Builds the Diorama app on a free GitHub-hosted macOS runner, launches it in
+# the iOS Simulator, and uploads a screenshot + build log as artifacts.
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ "ios/**", ".github/workflows/ios-sim.yml" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tooling versions
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes | grep -i ios || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Pick a simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.name|test("iPhone"))] | .[0].udid')
+          NAME=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.name|test("iPhone"))] | .[0].name')
+          echo "Using simulator: $NAME ($UDID)"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Build for Simulator
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Diorama.xcodeproj \
+            -scheme Diorama \
+            -configuration Debug \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee ../ios-build.log
+
+      - name: Boot, install, launch
+        if: success()
+        working-directory: ios
+        run: |
+          UDID="${{ steps.sim.outputs.udid }}"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b || true
+          APP=$(find build/Build/Products -name "Diorama.app" -type d | head -1)
+          echo "App bundle: $APP"
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.phot9.diorama || true
+          sleep 8
+          xcrun simctl io "$UDID" screenshot ../ios-screenshot.png || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator
+          path: |
+            ios-screenshot.png
+            ios-build.log
+          if-no-files-found: warn

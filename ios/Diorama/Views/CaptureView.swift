@@ -8,6 +8,7 @@ struct CaptureView: View {
 
     @StateObject private var camera = CameraController()
     @State private var capturing = false
+    @State private var showLibrary = false
 
     var body: some View {
         ZStack {
@@ -32,20 +33,37 @@ struct CaptureView: View {
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(.black.opacity(0.45), in: Capsule())
                     .padding(.top, 16)
+                if !camera.authorized {
+                    Text("Camera access is needed to capture — or choose a photo from your library below.")
+                        .multilineTextAlignment(.center)
+                        .font(.footnote)
+                        .foregroundColor(.white.opacity(0.85))
+                        .padding(.horizontal, 32)
+                }
                 Spacer()
                 shutter
-                    .padding(.bottom, 40)
-            }
-
-            if !camera.authorized {
-                Text("Camera access is needed to capture a group photo.")
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.white)
-                    .padding()
+                Button {
+                    showLibrary = true
+                } label: {
+                    Label("Choose from Library", systemImage: "photo.on.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.black.opacity(0.45), in: Capsule())
+                }
+                .padding(.top, 14)
+                .padding(.bottom, 40)
             }
         }
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
+        .sheet(isPresented: $showLibrary) {
+            LibraryPicker { jpeg in
+                showLibrary = false
+                camera.stop()
+                onCapture(jpeg)
+            }
+        }
     }
 
     private var shutter: some View {
