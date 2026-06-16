@@ -38,8 +38,10 @@ export async function buildSplat(backdropJpeg: Buffer, depthPng: Buffer, p: Spla
   const depth = new Uint16Array(depthRaw.buffer, depthRaw.byteOffset, W * H);
 
   const cx = W / 2, cy = H / 2, f = p.focalLength;
-  const zNear = Math.max(0.3, p.avgCamTz * 0.7);
-  const zFar = Math.max(zNear + 1, p.avgCamTz * 4.0);
+  // Compressed depth span keeps the cloud denser and avoids extreme stretching
+  // of far points (foreground ~ people depth, background ~3× back).
+  const zNear = Math.max(0.3, p.avgCamTz * 0.75);
+  const zFar = Math.max(zNear + 1, p.avgCamTz * 3.0);
 
   // Sub-sample to respect maxPoints.
   const maxPoints = p.maxPoints ?? 500_000;

@@ -68,12 +68,19 @@ const res = await fetch(body.model_glb.url);
 if (!res.ok) throw new Error(`body download ${res.status}`);
 const bodyGlb = Buffer.from(await res.arrayBuffer());
 
+// Keep prominent (foreground) people; prune small distant passers-by whose
+// bbox area is under 15% of the largest detected person.
+const areas = people.map((q) => (q.bbox[2] - q.bbox[0]) * (q.bbox[3] - q.bbox[1]));
+const maxArea = Math.max(...areas);
+const keepPersons = people.map((_, i) => i).filter((i) => areas[i] >= 0.15 * maxArea);
+console.error("people kept:", keepPersons.length, "of", people.length, "(bbox-area filter)");
+
 console.error("Stage C': projecting photo onto mesh …");
 const heroPath = path.join(outDir, "hero.glb");
 const proj = await projectPhotoOntoGLB(
   bodyGlb,
   image,
-  { focalLength: people[0].focal_length, imgW: backdrop.img_w, imgH: backdrop.img_h },
+  { focalLength: people[0].focal_length, imgW: backdrop.img_w, imgH: backdrop.img_h, keepPersons },
   heroPath
 );
 console.error("texture convention:", JSON.stringify(proj.convention), "coverage:", proj.coverage.toFixed(3));

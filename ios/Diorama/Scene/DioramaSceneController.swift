@@ -248,9 +248,9 @@ final class DioramaSceneController: NSObject {
 
         let indices = [Int32](0..<Int32(n))
         let element = SCNGeometryElement(indices: indices, primitiveType: .point)
-        element.minimumPointScreenSpaceRadius = 3
-        element.maximumPointScreenSpaceRadius = 10
-        element.pointSize = 7
+        element.minimumPointScreenSpaceRadius = 4
+        element.maximumPointScreenSpaceRadius = 13
+        element.pointSize = 9
 
         let geo = SCNGeometry(sources: [vSource, cSource], elements: [element])
         let mat = SCNMaterial()

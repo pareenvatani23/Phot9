@@ -20,6 +20,8 @@ export interface ProjectParams {
   /** principal point; defaults to image centre */
   cx?: number;
   cy?: number;
+  /** person node indices to keep (others, e.g. distant passers-by, are pruned) */
+  keepPersons?: number[];
 }
 
 interface Convention {
@@ -70,7 +72,21 @@ export async function projectPhotoOntoGLB(
     ...params,
     cx: params.cx ?? params.imgW / 2,
     cy: params.cy ?? params.imgH / 2,
+    keepPersons: params.keepPersons ?? [],
   };
+
+  // Prune background "person_NN" nodes not in the keep set (distant passers-by
+  // stay in the photo/point-cloud backdrop, but not as floating 3D meshes).
+  if (p.keepPersons.length > 0) {
+    const keep = new Set(p.keepPersons);
+    for (const node of doc.getRoot().listNodes()) {
+      const m = /^person_(\d+)$/.exec(node.getName() ?? "");
+      if (m && !keep.has(parseInt(m[1], 10))) {
+        node.getMesh()?.dispose();
+        node.dispose();
+      }
+    }
+  }
 
   // Gather all vertex positions to pick the best sign convention.
   const meshes = doc.getRoot().listMeshes();
