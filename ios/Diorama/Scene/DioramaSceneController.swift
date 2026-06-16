@@ -248,16 +248,34 @@ final class DioramaSceneController: NSObject {
 
         let indices = [Int32](0..<Int32(n))
         let element = SCNGeometryElement(indices: indices, primitiveType: .point)
-        element.minimumPointScreenSpaceRadius = 3
-        element.maximumPointScreenSpaceRadius = 10
-        element.pointSize = 7
+        element.minimumPointScreenSpaceRadius = 4
+        element.maximumPointScreenSpaceRadius = 14
+        element.pointSize = 10
 
         let geo = SCNGeometry(sources: [vSource, cSource], elements: [element])
         let mat = SCNMaterial()
         mat.lightingModel = .constant
+        // Soft radial-falloff sprite so each point reads like a Gaussian blob
+        // (modulated by the per-vertex photo color) instead of a hard square.
+        mat.diffuse.contents = softPointSprite()
         mat.isDoubleSided = true
         geo.firstMaterial = mat
         return SCNNode(geometry: geo)
+    }
+
+    /// White radial gradient (opaque center → transparent edge) used as a point
+    /// sprite to approximate Gaussian falloff.
+    private func softPointSprite(size: CGFloat = 64) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { ctx in
+            let cg = ctx.cgContext
+            let colors = [UIColor(white: 1, alpha: 1).cgColor, UIColor(white: 1, alpha: 0).cgColor] as CFArray
+            guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                        colors: colors, locations: [0, 1]) else { return }
+            let c = CGPoint(x: size / 2, y: size / 2)
+            cg.drawRadialGradient(grad, startCenter: c, startRadius: 0,
+                                  endCenter: c, endRadius: size / 2, options: [])
+        }
     }
 
     // MARK: Lighting + ground shadow
