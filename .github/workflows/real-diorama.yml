@@ -92,20 +92,17 @@ jobs:
           xcrun simctl io "$UDID" recordVideo --codec=h264 --force ../demo/real-orbit.mp4 &
           REC=$!
           sleep 12
-          # CRITICAL: SIGINT must reach the actual recorder. Signalling only the
-          # `xcrun` wrapper PID does NOT stop simctl's recording (it keeps running
-          # and the file is later truncated -> no moov). pkill the real process,
-          # then poll until the mp4 is finalized (moov written).
+          # Stop recording: SIGINT must reach the ACTUAL recorder (signalling the
+          # xcrun wrapper doesn't propagate). Then WAIT for the recorder process to
+          # exit, which is when simctl finalizes the mp4. NEVER SIGKILL — kill -9
+          # makes simctl DELETE its output file.
           kill -INT "$REC" 2>/dev/null || true
           pkill -INT -f "simctl.*recordVideo" 2>/dev/null || true
-          pkill -INT -f "recordVideo" 2>/dev/null || true
-          for i in $(seq 1 90); do
-            if python3 -c "import sys;sys.exit(0 if b'moov' in open('../demo/real-orbit.mp4','rb').read() else 1)" 2>/dev/null; then
-              echo "video finalized after ${i}s"; break
-            fi
+          for i in $(seq 1 180); do
+            pgrep -f "simctl.*recordVideo" >/dev/null 2>&1 || { echo "recorder exited after ${i}s"; break; }
             sleep 1
           done
-          pkill -9 -f "recordVideo" 2>/dev/null || true
+          sleep 2  # filesystem flush
           xcrun simctl io "$UDID" screenshot ../demo/real-screenshot.png
           ls -la ../demo/real-orbit.mp4 ../demo/real-screenshot.png
           # Fail loudly if the mp4 has no moov atom, so we never publish a broken video.
