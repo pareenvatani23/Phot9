@@ -237,8 +237,7 @@
             if (doProject) {
               const cb = p.bbox, tb2 = p.tightBbox || p.bbox;
               const cw = cb[2] - cb[0], ch = cb[3] - cb[1];
-              const tex = await loadTexture(loader, p.cutoutUrl);
-              tex.colorSpace = THREE.SRGBColorSpace;
+              const tex = await makeProjTexture(p.cutoutUrl);  // edge-filled, no transparent holes
               proj = { tex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
                        uvS: [(tb2[2] - tb2[0]) / cw, (tb2[3] - tb2[1]) / ch] };
             }
@@ -315,7 +314,7 @@
               vec2 n = (vP - bbMin) / bbSize;            // 0..1 across the mesh front
               vec2 uv = uv0 + vec2(n.x, 1.0 - n.y) * uvS; // into the cutout's person region
               vec4 c = texture2D(map, uv);
-              if (c.a < 0.4) discard;
+              if (c.a < 0.08) discard;        // only fully-empty; mesh defines the silhouette
               gl_FragColor = vec4(c.rgb, 1.0);
             }
           `,
@@ -326,6 +325,30 @@
     function loadTexture(loader, url) {
       return new Promise((resolve, reject) =>
         loader.load(url, resolve, undefined, () => reject(new Error("texture: " + url))));
+    }
+
+    // Build a projection texture from an RGBA cutout: bleed the person's colours
+    // outward (blurred copies behind the sharp image) so the mesh never samples
+    // transparent/black background → kills the edge speckle/holes.
+    function makeProjTexture(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          const cv = document.createElement("canvas");
+          cv.width = img.width; cv.height = img.height;
+          const ctx = cv.getContext("2d");
+          ctx.filter = "blur(14px)";          // colour bleed into the transparent margin
+          for (let i = 0; i < 4; i++) ctx.drawImage(img, 0, 0, cv.width, cv.height);
+          ctx.filter = "none";
+          ctx.drawImage(img, 0, 0);            // sharp person on top
+          const tex = new THREE.CanvasTexture(cv);
+          tex.colorSpace = THREE.SRGBColorSpace;
+          resolve(tex);
+        };
+        img.onerror = () => reject(new Error("img: " + url));
+        img.src = url;
+      });
     }
 
     addEventListener("resize", () => {
