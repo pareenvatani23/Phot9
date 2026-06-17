@@ -41,7 +41,7 @@
       near:  num("near", 2.0),
       range: num("range", 7.0),
       edge:  num("edge", 0.06),   // max depth delta across a quad before we drop it (holes vs rubber-sheet)
-      cols:  num("cols", 240),
+      cols:  num("cols", 340),
       flip:  params.get("flip") !== "0",  // Depth Anything: brighter = nearer → invert for distance
     };
 
@@ -121,6 +121,16 @@
       g.computeVertexNormals();
       const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: photoTex, side: THREE.DoubleSide }));
       scene.add(mesh);
+
+      // Backdrop: the full photo on a flat plane just behind the relief, so the
+      // disocclusion holes reveal plausible scene pixels instead of black.
+      const bgDist = (TUNE.near + TUNE.range) * 1.12;
+      const bg = new THREE.Mesh(
+        new THREE.PlaneGeometry(2 * tanX * bgDist, 2 * tanY * bgDist),
+        new THREE.MeshBasicMaterial({ map: photoTex }));
+      bg.position.set(0, 0, -bgDist);
+      bg.renderOrder = -1;
+      scene.add(bg);
 
       // Look from the photo's camera (origin), pivot around the scene centre.
       camera.position.set(0, 0, 0.001);
