@@ -30,6 +30,9 @@ const MAX_PEOPLE = 12;
 const BBOX_EXPAND = 0.08; // matches the union-mask margin used elsewhere
 
 interface FalImageOut { image: { url: string; width?: number; height?: number } }
+interface FalMeshOut { model_mesh?: { url: string } }
+
+type Bbox = [number, number, number, number];
 
 const [imgPath, outDir] = process.argv.slice(2);
 if (!imgPath || !outDir) {
@@ -39,7 +42,7 @@ if (!imgPath || !outDir) {
 await fs.mkdir(outDir, { recursive: true });
 const outFile = path.join(outDir, "scene.local.json");
 const model = process.env.MARBLE_MODEL || "marble-1.1";
-const deadline = Date.now() + 20 * 60 * 1000;
+const deadline = Date.now() + 38 * 60 * 1000;
 
 async function download(url: string): Promise<Buffer> {
   const res = await fetch(url);
@@ -73,7 +76,7 @@ try {
   if (detected.length === 0) throw new Error("no people detected");
 
   // ── 3. per-person cutouts (BiRefNet on the crop) ──────────────────────────
-  const people: { id: number; cutoutUrl: string; bbox: [number, number, number, number] }[] = [];
+  const people: { id: number; cutoutUrl: string; bbox: Bbox; tightBbox: Bbox; meshUrl?: string }[] = [];
   const maskTiles: { input: Buffer; left: number; top: number }[] = [];
 
   for (let i = 0; i < detected.length; i++) {
@@ -100,7 +103,22 @@ try {
       // Normalise the cutout back to the exact crop rect so it aligns 1:1 with bbox.
       const rgba = await sharp(await download(bf.image.url)).resize(cw, ch, { fit: "fill" }).png().toBuffer();
       const cutoutUrl = await uploadToFal(rgba, "image/png", `person${i}.png`);
-      people.push({ id: i, cutoutUrl, bbox: crop });
+
+      // Textured 3D mesh from the clean cutout (alpha = foreground mask).
+      // Non-fatal: a bad jumping-pose mesh just leaves this person as a billboard.
+      let meshUrl: string | undefined;
+      try {
+        console.error(`Hunyuan3D: meshing person ${i}…`);
+        const h3 = await runFal<FalMeshOut>(
+          "fal-ai/hunyuan3d/v2",
+          { input_image_url: cutoutUrl, textured_mesh: true, num_inference_steps: 50, octree_resolution: 256 },
+          { deadline }
+        );
+        meshUrl = h3.model_mesh?.url;
+      } catch (e) {
+        console.error(`person ${i} 3D failed (billboard fallback):`, e instanceof Error ? e.message : e);
+      }
+      people.push({ id: i, cutoutUrl, bbox: crop, tightBbox: detected[i] as Bbox, meshUrl });
 
       // White RGB + the person's alpha -> a tile that paints a white silhouette
       // when composited (over black) into the union mask.
@@ -139,7 +157,9 @@ try {
   const scene = {
     world: { splatUrl: marble.splatUrl, model, worldId: marble.worldId },
     photo: { w: W, h: H },
-    people: people.map((p) => ({ id: p.id, cutoutUrl: p.cutoutUrl, bbox: p.bbox })),
+    people: people.map((p) => ({
+      id: p.id, cutoutUrl: p.cutoutUrl, bbox: p.bbox, tightBbox: p.tightBbox, meshUrl: p.meshUrl,
+    })),
   };
   const sceneUrl = await uploadToFal(Buffer.from(JSON.stringify(scene)), "application/json", "scene.json");
   const viewerUrl = `${VIEWER}?scene=${encodeURIComponent(sceneUrl)}`;

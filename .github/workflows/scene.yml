@@ -27,7 +27,7 @@ jobs:
   scene:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       FAL_KEY: ${{ inputs.fal_key }}
       WORLDLABS_API_KEY: ${{ inputs.worldlabs_key }}

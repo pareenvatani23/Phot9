@@ -159,7 +159,16 @@
 
         // Real 3D mesh when available; otherwise fall back to a billboard card.
         if (p.meshUrl) {
-          try { await placeMesh(gltfLoader, p.meshUrl, foot, worldH); return; }
+          // A mesh is just the person, so size/anchor it off the TIGHT bbox
+          // (the cutout card uses the looser expanded crop).
+          const tb = p.tightBbox || p.bbox;
+          const tFootN = { x: ((tb[0] + tb[2]) / 2) / W, y: tb[3] / H };
+          const tSizeN = (tb[3] - tb[1]) / H;
+          const worldHm = tSizeN * 2 * d * tanHalf;
+          const ndcM = new THREE.Vector3(tFootN.x * 2 - 1, -(tFootN.y * 2 - 1), 0.5).unproject(camera);
+          const footM = camera.position.clone().add(ndcM.sub(camera.position).normalize().multiplyScalar(d));
+          footM.y += TUNE.lift * worldHm;
+          try { await placeMesh(gltfLoader, p.meshUrl, footM, worldHm); return; }
           catch (e) { console.warn("mesh failed, billboard fallback", p.id, e); }
         }
 
