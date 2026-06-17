@@ -80,29 +80,37 @@ try {
     const crop = expandBbox(detected[i] as [number, number, number, number], W, H, BBOX_EXPAND);
     const [cx0, cy0, cx1, cy1] = crop;
     const cw = cx1 - cx0, ch = cy1 - cy0;
-    if (cw < 8 || ch < 8) continue;
+    // Skip degenerate/edge slivers — too small for matting (BiRefNet 422s on them).
+    if (cw < 40 || ch < 40 || cw * ch < W * H * 0.002) {
+      console.error(`skip person ${i}: tiny crop ${cw}x${ch}`);
+      continue;
+    }
 
-    const cropBuf = await sharp(image).extract({ left: cx0, top: cy0, width: cw, height: ch }).png().toBuffer();
-    const cropUrl = await uploadToFal(cropBuf, "image/png", `crop${i}.png`);
+    try {
+      const cropBuf = await sharp(image).extract({ left: cx0, top: cy0, width: cw, height: ch }).png().toBuffer();
+      const cropUrl = await uploadToFal(cropBuf, "image/png", `crop${i}.png`);
 
-    console.error(`BiRefNet: matting person ${i}…`);
-    const bf = await runFal<FalImageOut>(
-      "fal-ai/birefnet/v2",
-      { image_url: cropUrl, model: "Portrait", output_format: "png", refine_foreground: true },
-      { deadline }
-    );
+      console.error(`BiRefNet: matting person ${i}…`);
+      const bf = await runFal<FalImageOut>(
+        "fal-ai/birefnet/v2",
+        { image_url: cropUrl, model: "Portrait", output_format: "png", refine_foreground: true },
+        { deadline }
+      );
 
-    // Normalise the cutout back to the exact crop rect so it aligns 1:1 with bbox.
-    const rgba = await sharp(await download(bf.image.url)).resize(cw, ch, { fit: "fill" }).png().toBuffer();
-    const cutoutUrl = await uploadToFal(rgba, "image/png", `person${i}.png`);
-    people.push({ id: i, cutoutUrl, bbox: crop });
+      // Normalise the cutout back to the exact crop rect so it aligns 1:1 with bbox.
+      const rgba = await sharp(await download(bf.image.url)).resize(cw, ch, { fit: "fill" }).png().toBuffer();
+      const cutoutUrl = await uploadToFal(rgba, "image/png", `person${i}.png`);
+      people.push({ id: i, cutoutUrl, bbox: crop });
 
-    // White RGB + the person's alpha -> a tile that paints a white silhouette
-    // when composited (over black) into the union mask.
-    const alphaPng = await sharp(rgba).ensureAlpha().extractChannel(3).png().toBuffer();
-    const tile = await sharp({ create: { width: cw, height: ch, channels: 3, background: "#ffffff" } })
-      .joinChannel(alphaPng).png().toBuffer();
-    maskTiles.push({ input: tile, left: cx0, top: cy0 });
+      // White RGB + the person's alpha -> a tile that paints a white silhouette
+      // when composited (over black) into the union mask.
+      const alphaPng = await sharp(rgba).ensureAlpha().extractChannel(3).png().toBuffer();
+      const tile = await sharp({ create: { width: cw, height: ch, channels: 3, background: "#ffffff" } })
+        .joinChannel(alphaPng).png().toBuffer();
+      maskTiles.push({ input: tile, left: cx0, top: cy0 });
+    } catch (e) {
+      console.error(`skip person ${i}: matting failed —`, e instanceof Error ? e.message : e);
+    }
   }
   if (people.length === 0) throw new Error("no usable person crops");
 
