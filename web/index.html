@@ -40,6 +40,7 @@
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
     // ── Inputs ───────────────────────────────────────────────────────────────
@@ -60,6 +61,7 @@
       cam:   num("cam", 2.6),
       depth: num("depth", 2.0),
       lift:  num("lift", 0),
+      yaw:   num("yaw", 0),   // mesh facing offset (radians) toward camera-forward
     };
 
     const hud = document.getElementById("hud");
@@ -76,6 +78,12 @@
 
     const spark = new SparkRenderer({ renderer });
     scene.add(spark);
+
+    // Lights for textured GLB people (splats are unlit and ignore these).
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, 2.0));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(0.5, 1, 1.2);
+    scene.add(sun);
 
     const controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
@@ -135,14 +143,12 @@
 
       const loader = new THREE.TextureLoader();
       loader.setCrossOrigin("anonymous");
+      const gltfLoader = new GLTFLoader();
+      gltfLoader.setCrossOrigin("anonymous");
 
       await Promise.all(people.map(async (p) => {
-        const tex = await loadTexture(loader, p.cutoutUrl);
-        tex.colorSpace = THREE.SRGBColorSpace;
-
         const d = TUNE.depth * (medSize / p.sizeN);            // per-person distance
         const worldH = p.sizeN * 2 * d * tanHalf;              // projected height match
-        const worldW = worldH * (p.aspect || 0.45);
 
         // Foot point: unproject the foot pixel along the view ray at distance d.
         const ndc = new THREE.Vector3(p.footN.x * 2 - 1, -(p.footN.y * 2 - 1), 0.5);
@@ -151,6 +157,15 @@
         const foot = camera.position.clone().add(dir.multiplyScalar(d));
         foot.y += TUNE.lift * worldH;
 
+        // Real 3D mesh when available; otherwise fall back to a billboard card.
+        if (p.meshUrl) {
+          try { await placeMesh(gltfLoader, p.meshUrl, foot, worldH); return; }
+          catch (e) { console.warn("mesh failed, billboard fallback", p.id, e); }
+        }
+
+        const tex = await loadTexture(loader, p.cutoutUrl);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const worldW = worldH * (p.aspect || 0.45);
         const geo = new THREE.PlaneGeometry(worldW, worldH);
         const mat = new THREE.MeshBasicMaterial({
           map: tex, transparent: true, alphaTest: 0.5,
@@ -162,6 +177,26 @@
         scene.add(mesh);
         billboards.push({ mesh });
       }));
+    }
+
+    // Load a GLB, scale it to `worldH`, and anchor its feet at `foot`.
+    function placeMesh(gltfLoader, url, foot, worldH) {
+      return new Promise((resolve, reject) => {
+        gltfLoader.load(url, (gltf) => {
+          const obj = gltf.scene;
+          obj.rotation.y = TUNE.yaw;
+          let box = new THREE.Box3().setFromObject(obj);
+          const size = new THREE.Vector3(); box.getSize(size);
+          obj.scale.setScalar(worldH / (size.y || 1));
+          box = new THREE.Box3().setFromObject(obj);
+          const c = new THREE.Vector3(); box.getCenter(c);
+          obj.position.x += foot.x - c.x;          // centre horizontally on the foot point
+          obj.position.z += foot.z - c.z;
+          obj.position.y += foot.y - box.min.y;    // drop feet onto the ground point
+          scene.add(obj);
+          resolve(obj);
+        }, undefined, reject);
+      });
     }
 
     function loadTexture(loader, url) {
