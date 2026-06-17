@@ -1,0 +1,60 @@
+name: Re-mesh A/B (image-to-3D models)
+
+# Reuses an existing scene.json (its clean world + person cutouts) and regenerates
+# only the per-person 3D meshes with several image-to-3D models, so we can compare
+# quality cheaply. Emits one scene + viewer link per model to the ci-remesh branch.
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/remesh.yml" ]
+  workflow_dispatch:
+    inputs:
+      fal_key:
+        description: "fal API key (id:secret)"
+        required: true
+      base_scene_url:
+        description: "Existing scene.json URL to reuse (world + cutouts)"
+        required: true
+      models:
+        description: "Space-separated models: hunyuan3d-v3 rodin tripo sam3body hunyuan3d-v2"
+        required: false
+        default: "hunyuan3d-v3 rodin sam3body"
+
+permissions:
+  contents: write
+
+jobs:
+  remesh:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FAL_KEY: ${{ inputs.fal_key }}
+      BASE_SCENE_URL: ${{ inputs.base_scene_url }}
+      MODELS: ${{ inputs.models }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mask key
+        run: echo "::add-mask::${{ inputs.fal_key }}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Re-mesh with each model
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+          for M in $MODELS; do
+            echo "=== $M ==="
+            MESH_MODEL=$M node dist/remeshRun.js "$BASE_SCENE_URL" ../demo/scene || true
+            cat ../demo/scene/remesh_$M.json || true
+          done
+      - name: Publish results to ci-remesh
+        if: always()
+        run: |
+          git config user.name "ci"; git config user.email "ci@local"
+          git checkout --orphan ci-remesh
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f demo/scene/remesh_*.json
+          git commit -q -m "Re-mesh A/B $(date -u +%FT%TZ)"
+          git push -f origin ci-remesh
