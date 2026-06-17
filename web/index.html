@@ -56,6 +56,7 @@
     const DEFAULT_WORLD = "https://cdn.marble.worldlabs.ai/9306d551-be38-408e-b029-2bd3f431af29/0e2f4478-757f-46fa-8628-bc776fe1be27_ceramic_500k.spz";
     const sceneUrl = params.get("scene");
     const PROJECT = params.has("project");   // projective-texture untextured meshes (e.g. SAM body) from the cutout
+    const FLIPY = params.has("flipy");       // SAM 3D Body is Y-down; flip it upright
     const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
     const TUNE = {
       fov:   num("fov", 50),
@@ -213,7 +214,8 @@
           obj.rotation.y = TUNE.yaw;
           let box = new THREE.Box3().setFromObject(obj);
           const size = new THREE.Vector3(); box.getSize(size);
-          obj.scale.setScalar(worldH / (size.y || 1));
+          const s = worldH / (size.y || 1);
+          obj.scale.set(s, FLIPY ? -s : s, s);     // flip Y-down meshes upright (no left-right mirror)
           box = new THREE.Box3().setFromObject(obj);
           const c = new THREE.Vector3(); box.getCenter(c);
           obj.position.x += foot.x - c.x;          // centre horizontally on the foot point
