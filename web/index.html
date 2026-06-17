@@ -251,7 +251,8 @@
               proj = { tex: ptex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
                        uvS: [(tb2[2] - tb2[0]) / cw, (tb2[3] - tb2[1]) / ch] };
             }
-            meshObj = await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj, doFlip);
+            const perYaw = num("yaw" + p.id, 0);   // per-person facing override
+            meshObj = await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj, doFlip, perYaw);
             scene.add(meshObj);
           } catch (e) { console.warn("mesh failed, 2D only for person", p.id, e); meshObj = null; }
         }
@@ -295,15 +296,15 @@
 
     // Load a GLB, scale it to `worldH`, anchor its feet at `foot`. When `proj` is
     // given, replace materials with a front-planar projection of the cutout.
-    function placeMesh(gltfLoader, url, foot, worldH, proj, flip) {
+    function placeMesh(gltfLoader, url, foot, worldH, proj, flip, perYaw = 0) {
       return new Promise((resolve, reject) => {
         gltfLoader.load(url, (gltf) => {
           const obj = gltf.scene;
           if (proj) applyProjection(obj, proj);
           // Flip = 180° about the camera-forward (Z) axis: turns a Y-down mesh
-          // upright while keeping its front toward the camera. Then any extra
-          // rotx/roty/rotz nudges. Rotation (not negative scale) so it's robust.
-          obj.rotation.set(TUNE.rotx, TUNE.yaw, TUNE.rotz + (flip ? Math.PI : 0));
+          // upright while keeping its front toward the camera. yaw + perYaw aim
+          // each person's facing. Rotation (not negative scale) so it's robust.
+          obj.rotation.set(TUNE.rotx, TUNE.yaw + perYaw, TUNE.rotz + (flip ? Math.PI : 0));
           let box = new THREE.Box3().setFromObject(obj);
           const size = new THREE.Vector3(); box.getSize(size);
           const s = worldH / (size.y || 1);
