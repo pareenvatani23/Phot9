@@ -40,6 +40,7 @@
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
@@ -56,14 +57,18 @@
     const DEFAULT_WORLD = "https://cdn.marble.worldlabs.ai/9306d551-be38-408e-b029-2bd3f431af29/0e2f4478-757f-46fa-8628-bc776fe1be27_ceramic_500k.spz";
     const sceneUrl = params.get("scene");
     const PROJECT = params.has("project");   // projective-texture untextured meshes (e.g. SAM body) from the cutout
-    const FLIPY = params.has("flipy");       // SAM 3D Body is Y-down; flip it upright
+    // flip override: ?flipy=1 force on, ?flipy=0 force off, absent = use manifest
+    const FLIP_OVERRIDE = params.has("flipy") ? params.get("flipy") !== "0" : null;
+    const MODE = params.get("mode") || "orbit";   // orbit | walk
     const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
     const TUNE = {
       fov:   num("fov", 50),
       cam:   num("cam", 2.6),
       depth: num("depth", 2.0),
       lift:  num("lift", 0),
-      yaw:   num("yaw", 0),   // mesh facing offset (radians) toward camera-forward
+      yaw:   num("yaw", 0),    // extra rotation about Y (radians)
+      rotx:  num("rotx", 0),   // extra rotation about X
+      rotz:  num("rotz", 0),   // extra rotation about Z
     };
 
     const hud = document.getElementById("hud");
@@ -87,12 +92,25 @@
     sun.position.set(0.5, 1, 1.2);
     scene.add(sun);
 
-    const controls = new OrbitControls(camera, canvas);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.autoRotate = true;          // gentle idle motion (demo)
-    controls.autoRotateSpeed = 0.5;
+    // ── Controls: orbit (default) or first-person walk (?mode=walk) ──────────
+    let orbit = null, walk = null;
+    const keys = {};
+    if (MODE === "walk") {
+      walk = new PointerLockControls(camera, document.body);
+      scene.add(walk.object ?? walk.getObject?.() ?? camera);
+      canvas.addEventListener("click", () => walk.lock());
+      addEventListener("keydown", (e) => (keys[e.code] = true));
+      addEventListener("keyup", (e) => (keys[e.code] = false));
+      hud.textContent = "Click to walk · WASD move · mouse look · Space/Shift up·down · Esc release";
+    } else {
+      orbit = new OrbitControls(camera, canvas);
+      orbit.enableDamping = true;
+      orbit.dampingFactor = 0.08;
+      orbit.autoRotate = true;          // gentle idle motion (demo)
+      orbit.autoRotateSpeed = 0.5;
+    }
 
+    const clock = new THREE.Clock();
     const billboards = []; // { mesh } — yaw toward camera each frame
 
     boot().catch(showError);
@@ -121,7 +139,9 @@
         await addPeople(manifest);
       }
 
-      hud.textContent = "Diorama — drag to orbit";
+      hud.textContent = MODE === "walk"
+        ? "Click to walk · WASD · mouse look · Esc release"
+        : "Diorama — drag to orbit";
     }
 
     async function addPeople(manifest) {
@@ -129,7 +149,7 @@
       if (!W || !H) throw new Error("scene.json missing photo {w,h}");
       // Manifest can request projection/flip (SAM body meshes); query params override.
       const doProject = PROJECT || !!manifest.render?.project;
-      const doFlip = FLIPY || !!manifest.render?.flipY;
+      const doFlip = FLIP_OVERRIDE !== null ? FLIP_OVERRIDE : !!manifest.render?.flipY;
 
       // Normalised geometry per person from the photo-space bbox.
       const people = manifest.people.map((p) => {
@@ -214,11 +234,14 @@
         gltfLoader.load(url, (gltf) => {
           const obj = gltf.scene;
           if (proj) applyProjection(obj, proj);
-          obj.rotation.y = TUNE.yaw;
+          // Flip = 180° about the camera-forward (Z) axis: turns a Y-down mesh
+          // upright while keeping its front toward the camera. Then any extra
+          // rotx/roty/rotz nudges. Rotation (not negative scale) so it's robust.
+          obj.rotation.set(TUNE.rotx, TUNE.yaw, TUNE.rotz + (flip ? Math.PI : 0));
           let box = new THREE.Box3().setFromObject(obj);
           const size = new THREE.Vector3(); box.getSize(size);
           const s = worldH / (size.y || 1);
-          obj.scale.set(s, flip ? -s : s, s);      // flip Y-down meshes upright (no left-right mirror)
+          obj.scale.setScalar(s);
           box = new THREE.Box3().setFromObject(obj);
           const c = new THREE.Vector3(); box.getCenter(c);
           obj.position.x += foot.x - c.x;          // centre horizontally on the foot point
@@ -277,7 +300,17 @@
 
     const camPos = new THREE.Vector3();
     renderer.setAnimationLoop(() => {
-      controls.update();
+      const dt = clock.getDelta();
+      if (orbit) orbit.update();
+      if (walk?.isLocked) {
+        const v = 2.2 * dt;
+        if (keys["KeyW"] || keys["ArrowUp"]) walk.moveForward(v);
+        if (keys["KeyS"] || keys["ArrowDown"]) walk.moveForward(-v);
+        if (keys["KeyA"] || keys["ArrowLeft"]) walk.moveRight(-v);
+        if (keys["KeyD"] || keys["ArrowRight"]) walk.moveRight(v);
+        if (keys["Space"]) camera.position.y += v;
+        if (keys["ShiftLeft"] || keys["ShiftRight"]) camera.position.y -= v;
+      }
       // Yaw-only billboarding: people pivot to face the camera but stay upright.
       camera.getWorldPosition(camPos);
       for (const b of billboards) {
