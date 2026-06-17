@@ -1,0 +1,68 @@
+name: Marble world smoke test
+
+# Validates the World Labs Marble path cheaply and in isolation from the heavy
+# SAM/depth pipeline: uploads demo/input.jpg to fal storage for a public URL,
+# generates a (draft) Marble world, and logs the resulting SPZ splat URL.
+#
+# Dispatch with the fal key + World Labs key. Both are masked. Uses the draft
+# model by default (~150 credits ≈ $0.12); set model input to marble-1.1 for full.
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/marble.yml" ]
+  workflow_dispatch:
+    inputs:
+      fal_key:
+        description: "fal API key (id:secret) — used only to host the image"
+        required: true
+      worldlabs_key:
+        description: "World Labs API key (WLT-Api-Key)"
+        required: true
+      model:
+        description: "Marble model"
+        required: false
+        default: "marble-1.0-draft"
+
+permissions:
+  contents: write
+
+jobs:
+  marble:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FAL_KEY: ${{ inputs.fal_key }}
+      WORLDLABS_API_KEY: ${{ inputs.worldlabs_key }}
+      MARBLE_MODEL: ${{ inputs.model }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask keys
+        run: |
+          echo "::add-mask::${{ inputs.fal_key }}"
+          echo "::add-mask::${{ inputs.worldlabs_key }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate Marble world
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+          node dist/marbleRun.js ../demo/input.jpg ../demo/marble
+          echo "--- marble.json ---"
+          cat ../demo/marble/marble.json
+
+      - name: Publish marble.json to ci-marble
+        if: always()
+        run: |
+          git config user.name "ci"; git config user.email "ci@local"
+          test -f demo/marble/marble.json || exit 0
+          git checkout --orphan ci-marble
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f demo/marble/marble.json web/index.html
+          git commit -q -m "Marble world $(date -u +%FT%TZ)"
+          git push -f origin ci-marble
