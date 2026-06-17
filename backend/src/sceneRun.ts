@@ -62,7 +62,7 @@ function meshCall(m: string, cutoutUrl: string): { endpoint: string; input: Reco
   switch (m) {
     case "sam3body": return { endpoint: "fal-ai/sam-3/3d-body", input: { image_url: cutoutUrl, export_meshes: true } };
     case "rodin": return { endpoint: "fal-ai/hyper3d/rodin", input: { input_image_urls: [cutoutUrl], geometry_file_format: "glb", material: "PBR" } };
-    case "tripo": return { endpoint: "tripo3d/tripo/v2.5/image-to-3d", input: { image_url: cutoutUrl, texture: true, pbr: true } };
+    case "tripo": return { endpoint: "tripo3d/tripo/v2.5/image-to-3d", input: { image_url: cutoutUrl } };
     case "hunyuan3d-v3": return { endpoint: "fal-ai/hunyuan3d-v3/image-to-3d", input: { input_image_url: cutoutUrl, textured_mesh: true } };
     case "hunyuan3d-v2":
     default: return { endpoint: "fal-ai/hunyuan3d/v2", input: { input_image_url: cutoutUrl, textured_mesh: true, octree_resolution: 256 } };
