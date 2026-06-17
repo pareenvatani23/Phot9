@@ -83,7 +83,7 @@ export async function generateWorldFromImage(
   let splat = extractSplatUrl(gen);
   const worldId = extractWorldId(gen);
   if (splat) return { splatUrl: splat, worldId: worldId ?? "", raw: gen };
-  if (!worldId) throw new Error("Marble: no world id in generate response");
+  if (!worldId) throw new Error("Marble: no world id; response=" + genText.slice(0, 900));
 
   // Poll until a terminal state.
   const pollMs = opts.pollMs ?? 5000;
