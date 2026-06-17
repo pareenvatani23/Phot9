@@ -305,17 +305,21 @@
             uvS: { value: new THREE.Vector2(proj.uvS[0], proj.uvS[1]) },
           },
           vertexShader: `
-            varying vec2 vP;
-            void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+            varying vec2 vP; varying vec3 vN;
+            void main() { vP = position.xy; vN = normalize(normalMatrix * normal);
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
           `,
           fragmentShader: `
-            uniform sampler2D map; uniform vec2 bbMin, bbSize, uv0, uvS; varying vec2 vP;
+            uniform sampler2D map; uniform vec2 bbMin, bbSize, uv0, uvS; varying vec2 vP; varying vec3 vN;
             void main() {
               vec2 n = (vP - bbMin) / bbSize;            // 0..1 across the mesh front
               vec2 uv = uv0 + vec2(n.x, 1.0 - n.y) * uvS; // into the cutout's person region
               vec4 c = texture2D(map, uv);
-              if (c.a < 0.08) discard;        // only fully-empty; mesh defines the silhouette
-              gl_FragColor = vec4(c.rgb, 1.0);
+              if (c.a < 0.04) discard;                   // only fully-empty; mesh defines the silhouette
+              // Gentle form shading on top of the baked photo lighting.
+              float diff = max(dot(normalize(vN), normalize(vec3(0.4, 0.7, 0.8))), 0.0);
+              float shade = 0.82 + 0.18 * diff;
+              gl_FragColor = vec4(c.rgb * shade, 1.0);
             }
           `,
         });
@@ -338,8 +342,8 @@
           const cv = document.createElement("canvas");
           cv.width = img.width; cv.height = img.height;
           const ctx = cv.getContext("2d");
-          ctx.filter = "blur(14px)";          // colour bleed into the transparent margin
-          for (let i = 0; i < 4; i++) ctx.drawImage(img, 0, 0, cv.width, cv.height);
+          ctx.filter = "blur(22px)";          // colour bleed into the transparent margin
+          for (let i = 0; i < 7; i++) ctx.drawImage(img, 0, 0, cv.width, cv.height);
           ctx.filter = "none";
           ctx.drawImage(img, 0, 0);            // sharp person on top
           const tex = new THREE.CanvasTexture(cv);
