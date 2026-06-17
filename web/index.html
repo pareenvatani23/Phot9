@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Diorama — Gaussian world</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; }
+    #c { display: block; width: 100vw; height: 100vh; }
+    #hud {
+      position: fixed; top: 12px; left: 0; right: 0; text-align: center;
+      font: 600 13px -apple-system, system-ui, sans-serif; color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none;
+    }
+    #err {
+      position: fixed; inset: 0; display: none; place-items: center; padding: 24px;
+      font: 500 14px -apple-system, system-ui, sans-serif; color: #ffb4b4; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud">Diorama — drag to orbit</div>
+  <div id="err"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.169.0",
+      "three/addons/": "https://esm.sh/three@0.169.0/examples/jsm/",
+      "@sparkjsdev/spark": "https://esm.sh/@sparkjsdev/spark@0.1.8"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+
+    // World splat URL comes from ?world=<url> (a Marble SPZ/PLY). Defaults to the
+    // latest Marble world generated from the demo photo.
+    const params = new URLSearchParams(location.search);
+    const DEFAULT_WORLD = "https://cdn.marble.worldlabs.ai/9306d551-be38-408e-b029-2bd3f431af29/0e2f4478-757f-46fa-8628-bc776fe1be27_ceramic_500k.spz";
+    const worldURL = params.get("world") || DEFAULT_WORLD;
+    const hud = document.getElementById("hud");
+    const errEl = document.getElementById("err");
+
+    const canvas = document.getElementById("c");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 1000);
+    camera.position.set(0, 0, 2.5);
+
+    const spark = new SparkRenderer({ renderer });
+    scene.add(spark);
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.autoRotate = true;          // gentle idle motion (demo)
+    controls.autoRotateSpeed = 0.6;
+
+    let world;
+    try {
+      world = new SplatMesh({ url: worldURL });
+      scene.add(world);
+      // Spark splats are Y-down relative to three's Y-up; flip to stand it upright.
+      world.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+      if (world.initialized && typeof world.initialized.then === "function") {
+        world.initialized.then(() => { hud.textContent = "Diorama — drag to orbit"; });
+        hud.textContent = "Loading world…";
+      }
+    } catch (e) {
+      showError(e);
+    }
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    renderer.setAnimationLoop(() => {
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    function showError(e) {
+      console.error(e);
+      errEl.style.display = "grid";
+      errEl.textContent = "Could not load world: " + (e?.message || e);
+    }
+    addEventListener("error", (ev) => showError(ev.error || ev.message));
+  </script>
+</body>
+</html>
