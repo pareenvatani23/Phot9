@@ -106,6 +106,8 @@
 
     const clock = new THREE.Clock();
     const billboards = [];
+    const peopleObjs = [];  // { billboard, mesh } per person — toggled by 2D/3D mode
+    let peopleMode = params.get("people") === "2d" ? "2d" : "3d";
 
     // Mobile game controls: left thumb = virtual joystick (move), right side = drag-look.
     function setupTouchControls(st) {
@@ -218,48 +220,77 @@
         const foot = camera.position.clone().add(dir.multiplyScalar(d));
         foot.y += TUNE.lift * worldH;
 
-        // Real 3D mesh when available; otherwise fall back to a billboard card.
+        // ── 2D billboard (always built; the photo cutout as a card) ──────────
+        const tex = await loadTexture(loader, p.cutoutUrl);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const worldW = worldH * (p.aspect || 0.45);
+        const bb = new THREE.Mesh(
+          new THREE.PlaneGeometry(worldW, worldH),
+          new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5,
+            depthWrite: true, side: THREE.DoubleSide, toneMapped: false }));
+        bb.position.copy(foot).add(new THREE.Vector3(0, worldH / 2, 0));
+        bb.renderOrder = 10;
+        scene.add(bb); billboards.push({ mesh: bb });
+
+        // ── 3D mesh (when available) ─────────────────────────────────────────
+        let meshObj = null;
         if (p.meshUrl) {
-          // A mesh is just the person, so size/anchor it off the TIGHT bbox
-          // (the cutout card uses the looser expanded crop).
-          const tb = p.tightBbox || p.bbox;
-          const tFootN = { x: ((tb[0] + tb[2]) / 2) / W, y: tb[3] / H };
-          const tSizeN = (tb[3] - tb[1]) / H;
-          const worldHm = tSizeN * 2 * d * tanHalf;
-          const ndcM = new THREE.Vector3(tFootN.x * 2 - 1, -(tFootN.y * 2 - 1), 0.5).unproject(camera);
-          const footM = camera.position.clone().add(ndcM.sub(camera.position).normalize().multiplyScalar(d));
-          footM.y += TUNE.lift * worldHm;
           try {
-            // Projective texturing: paint the person's cutout onto an untextured
-            // body mesh (SAM 3D Body). uvRect maps the mesh's front to the person
-            // region inside the cutout (which spans the looser crop).
+            const tb = p.tightBbox || p.bbox;
+            const tFootN = { x: ((tb[0] + tb[2]) / 2) / W, y: tb[3] / H };
+            const tSizeN = (tb[3] - tb[1]) / H;
+            const worldHm = tSizeN * 2 * d * tanHalf;
+            const ndcM = new THREE.Vector3(tFootN.x * 2 - 1, -(tFootN.y * 2 - 1), 0.5).unproject(camera);
+            const footM = camera.position.clone().add(ndcM.sub(camera.position).normalize().multiplyScalar(d));
+            footM.y += TUNE.lift * worldHm;
             let proj = null;
             if (doProject) {
               const cb = p.bbox, tb2 = p.tightBbox || p.bbox;
               const cw = cb[2] - cb[0], ch = cb[3] - cb[1];
-              const tex = await makeProjTexture(p.cutoutUrl);  // edge-filled, no transparent holes
-              proj = { tex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
+              const ptex = await makeProjTexture(p.cutoutUrl);
+              proj = { tex: ptex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
                        uvS: [(tb2[2] - tb2[0]) / cw, (tb2[3] - tb2[1]) / ch] };
             }
-            await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj, doFlip); return;
-          }
-          catch (e) { console.warn("mesh failed, billboard fallback", p.id, e); }
+            meshObj = await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj, doFlip);
+            scene.add(meshObj);
+          } catch (e) { console.warn("mesh failed, 2D only for person", p.id, e); meshObj = null; }
         }
-
-        const tex = await loadTexture(loader, p.cutoutUrl);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        const worldW = worldH * (p.aspect || 0.45);
-        const geo = new THREE.PlaneGeometry(worldW, worldH);
-        const mat = new THREE.MeshBasicMaterial({
-          map: tex, transparent: true, alphaTest: 0.5,
-          depthWrite: true, side: THREE.DoubleSide, toneMapped: false,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.copy(foot).add(new THREE.Vector3(0, worldH / 2, 0)); // stand upright
-        mesh.renderOrder = 10;
-        scene.add(mesh);
-        billboards.push({ mesh });
+        peopleObjs.push({ billboard: bb, mesh: meshObj });
       }));
+
+      applyPeopleMode();
+      if (peopleObjs.some((o) => o.mesh)) buildModeToggle();
+    }
+
+    // Show billboards (2D) or meshes (3D); people without a mesh stay 2D.
+    function applyPeopleMode() {
+      for (const o of peopleObjs) {
+        const has3d = !!o.mesh;
+        o.billboard.visible = peopleMode === "2d" || !has3d;
+        if (o.mesh) o.mesh.visible = peopleMode === "3d";
+      }
+    }
+
+    // Segmented 2D | 3D switch, top-center.
+    function buildModeToggle() {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:fixed;top:40px;left:50%;transform:translateX(-50%);display:flex;gap:2px;background:rgba(0,0,0,.45);border-radius:999px;padding:4px;z-index:6;font:600 13px -apple-system,system-ui,sans-serif;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)";
+      const mk = (label, val) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText = "border:0;border-radius:999px;padding:7px 18px;color:#fff;background:transparent;cursor:pointer";
+        b.onclick = () => { peopleMode = val; applyPeopleMode(); style(); };
+        return b;
+      };
+      const b2 = mk("2D", "2d"), b3 = mk("3D", "3d");
+      const style = () => {
+        for (const [b, v] of [[b2, "2d"], [b3, "3d"]]) {
+          const on = peopleMode === v;
+          b.style.background = on ? "#fff" : "transparent";
+          b.style.color = on ? "#000" : "#fff";
+        }
+      };
+      wrap.append(b2, b3); document.body.appendChild(wrap); style();
     }
 
     // Load a GLB, scale it to `worldH`, anchor its feet at `foot`. When `proj` is
@@ -282,8 +313,7 @@
           obj.position.x += foot.x - c.x;          // centre horizontally on the foot point
           obj.position.z += foot.z - c.z;
           obj.position.y += foot.y - box.min.y;    // drop feet onto the ground point
-          scene.add(obj);
-          resolve(obj);
+          resolve(obj);                            // caller adds to the scene
         }, undefined, reject);
       });
     }
