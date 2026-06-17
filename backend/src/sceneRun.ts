@@ -42,7 +42,32 @@ if (!imgPath || !outDir) {
 await fs.mkdir(outDir, { recursive: true });
 const outFile = path.join(outDir, "scene.local.json");
 const model = process.env.MARBLE_MODEL || "marble-1.1";
+const meshModel = process.env.MESH_MODEL || "sam3body";
 const deadline = Date.now() + 38 * 60 * 1000;
+
+/** Recursively find a .glb URL (model_mesh.url / model_glb.url / any *.glb). */
+function extractGlbUrl(obj: unknown): string | undefined {
+  const hits: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") { if (/^https?:\/\/\S+\.glb(\?|$)/i.test(v)) hits.push(v); }
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v as Record<string, unknown>).forEach(walk);
+  };
+  walk(obj);
+  return hits[0];
+}
+
+/** Map a model name to its fal endpoint + input for a single cutout URL. */
+function meshCall(m: string, cutoutUrl: string): { endpoint: string; input: Record<string, unknown> } {
+  switch (m) {
+    case "sam3body": return { endpoint: "fal-ai/sam-3/3d-body", input: { image_url: cutoutUrl, export_meshes: true } };
+    case "rodin": return { endpoint: "fal-ai/hyper3d/rodin", input: { input_image_urls: [cutoutUrl], geometry_file_format: "glb", material: "PBR" } };
+    case "tripo": return { endpoint: "tripo3d/tripo/v2.5/image-to-3d", input: { image_url: cutoutUrl, texture: true, pbr: true } };
+    case "hunyuan3d-v3": return { endpoint: "fal-ai/hunyuan3d-v3/image-to-3d", input: { input_image_url: cutoutUrl, textured_mesh: true } };
+    case "hunyuan3d-v2":
+    default: return { endpoint: "fal-ai/hunyuan3d/v2", input: { input_image_url: cutoutUrl, textured_mesh: true, octree_resolution: 256 } };
+  }
+}
 
 async function download(url: string): Promise<Buffer> {
   const res = await fetch(url);
@@ -108,13 +133,10 @@ try {
       // Non-fatal: a bad jumping-pose mesh just leaves this person as a billboard.
       let meshUrl: string | undefined;
       try {
-        console.error(`Hunyuan3D: meshing person ${i}…`);
-        const h3 = await runFal<FalMeshOut>(
-          "fal-ai/hunyuan3d/v2",
-          { input_image_url: cutoutUrl, textured_mesh: true, num_inference_steps: 50, octree_resolution: 256 },
-          { deadline }
-        );
-        meshUrl = h3.model_mesh?.url;
+        const { endpoint, input } = meshCall(meshModel, cutoutUrl);
+        console.error(`${meshModel}: meshing person ${i} via ${endpoint}…`);
+        const out = await runFal<FalMeshOut>(endpoint, input, { deadline });
+        meshUrl = (out as any)?.model_mesh?.url ?? extractGlbUrl(out);
       } catch (e) {
         console.error(`person ${i} 3D failed (billboard fallback):`, e instanceof Error ? e.message : e);
       }
@@ -154,9 +176,14 @@ try {
   console.error("splatUrl:", marble.splatUrl);
 
   // ── 6. emit scene.json ────────────────────────────────────────────────────
+  const isBodyMesh = meshModel === "sam3body";
   const scene = {
     world: { splatUrl: marble.splatUrl, model, worldId: marble.worldId },
     photo: { w: W, h: H },
+    meshModel,
+    // SAM body meshes are untextured + Y-down: tell the viewer to project the
+    // cutout onto them and stand them upright, so the bare link just works.
+    render: { project: isBodyMesh, flipY: isBodyMesh },
     people: people.map((p) => ({
       id: p.id, cutoutUrl: p.cutoutUrl, bbox: p.bbox, tightBbox: p.tightBbox, meshUrl: p.meshUrl,
     })),

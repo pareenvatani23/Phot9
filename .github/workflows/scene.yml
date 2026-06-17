@@ -19,6 +19,14 @@ on:
         description: "Marble model"
         required: false
         default: "marble-1.1"
+      image_path:
+        description: "Input photo path in repo"
+        required: false
+        default: "demo/input.jpg"
+      mesh_model:
+        description: "People mesher: sam3body | rodin | hunyuan3d-v3 | tripo | hunyuan3d-v2"
+        required: false
+        default: "sam3body"
 
 permissions:
   contents: write
@@ -32,6 +40,8 @@ jobs:
       FAL_KEY: ${{ inputs.fal_key }}
       WORLDLABS_API_KEY: ${{ inputs.worldlabs_key }}
       MARBLE_MODEL: ${{ inputs.model }}
+      MESH_MODEL: ${{ inputs.mesh_model }}
+      IMAGE_PATH: ${{ inputs.image_path }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +59,7 @@ jobs:
         run: |
           npm ci
           npm run build
-          node dist/sceneRun.js ../demo/input.jpg ../demo/scene
+          node dist/sceneRun.js "../$IMAGE_PATH" ../demo/scene
           echo "--- scene.local.json ---"
           cat ../demo/scene/scene.local.json
 

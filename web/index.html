@@ -127,6 +127,9 @@
     async function addPeople(manifest) {
       const W = manifest.photo?.w, H = manifest.photo?.h;
       if (!W || !H) throw new Error("scene.json missing photo {w,h}");
+      // Manifest can request projection/flip (SAM body meshes); query params override.
+      const doProject = PROJECT || !!manifest.render?.project;
+      const doFlip = FLIPY || !!manifest.render?.flipY;
 
       // Normalised geometry per person from the photo-space bbox.
       const people = manifest.people.map((p) => {
@@ -175,7 +178,7 @@
             // body mesh (SAM 3D Body). uvRect maps the mesh's front to the person
             // region inside the cutout (which spans the looser crop).
             let proj = null;
-            if (PROJECT) {
+            if (doProject) {
               const cb = p.bbox, tb2 = p.tightBbox || p.bbox;
               const cw = cb[2] - cb[0], ch = cb[3] - cb[1];
               const tex = await loadTexture(loader, p.cutoutUrl);
@@ -183,7 +186,7 @@
               proj = { tex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
                        uvS: [(tb2[2] - tb2[0]) / cw, (tb2[3] - tb2[1]) / ch] };
             }
-            await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj); return;
+            await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj, doFlip); return;
           }
           catch (e) { console.warn("mesh failed, billboard fallback", p.id, e); }
         }
@@ -206,7 +209,7 @@
 
     // Load a GLB, scale it to `worldH`, anchor its feet at `foot`. When `proj` is
     // given, replace materials with a front-planar projection of the cutout.
-    function placeMesh(gltfLoader, url, foot, worldH, proj) {
+    function placeMesh(gltfLoader, url, foot, worldH, proj, flip) {
       return new Promise((resolve, reject) => {
         gltfLoader.load(url, (gltf) => {
           const obj = gltf.scene;
@@ -215,7 +218,7 @@
           let box = new THREE.Box3().setFromObject(obj);
           const size = new THREE.Vector3(); box.getSize(size);
           const s = worldH / (size.y || 1);
-          obj.scale.set(s, FLIPY ? -s : s, s);     // flip Y-down meshes upright (no left-right mirror)
+          obj.scale.set(s, flip ? -s : s, s);      // flip Y-down meshes upright (no left-right mirror)
           box = new THREE.Box3().setFromObject(obj);
           const c = new THREE.Vector3(); box.getCenter(c);
           obj.position.x += foot.x - c.x;          // centre horizontally on the foot point
