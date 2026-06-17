@@ -42,8 +42,8 @@ function meshCall(model: string, cutoutUrl: string): { endpoint: string; input: 
   switch (model) {
     case "rodin":
       return { endpoint: "fal-ai/hyper3d/rodin", input: { input_image_urls: [cutoutUrl], geometry_file_format: "glb", material: "PBR" } };
-    case "tripo":
-      return { endpoint: "tripo3d/tripo/v2.5/image-to-3d", input: { image_url: cutoutUrl, texture: true, pbr: true } };
+    case "tripo": // v2.5 textures by default; extra texture/pbr flags 422 here
+      return { endpoint: "tripo3d/tripo/v2.5/image-to-3d", input: { image_url: cutoutUrl } };
     case "sam3body": // human-specialist: anatomy-correct body mesh (keeps pose)
       return { endpoint: "fal-ai/sam-3/3d-body", input: { image_url: cutoutUrl, export_meshes: true } };
     case "hunyuan3d-v3":
