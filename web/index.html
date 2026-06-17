@@ -40,7 +40,6 @@
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-    import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
@@ -92,16 +91,11 @@
     sun.position.set(0.5, 1, 1.2);
     scene.add(sun);
 
-    // ── Controls: orbit (default) or first-person walk (?mode=walk) ──────────
-    let orbit = null, walk = null;
-    const keys = {};
-    if (MODE === "walk") {
-      walk = new PointerLockControls(camera, document.body);
-      scene.add(walk.object ?? walk.getObject?.() ?? camera);
-      canvas.addEventListener("click", () => walk.lock());
-      addEventListener("keydown", (e) => (keys[e.code] = true));
-      addEventListener("keyup", (e) => (keys[e.code] = false));
-      hud.textContent = "Click to walk · WASD move · mouse look · Space/Shift up·down · Esc release";
+    // ── Controls: orbit (default) or mobile first-person walk (?mode=walk) ───
+    let orbit = null;
+    const walkState = MODE === "walk" ? { yaw: 0, pitch: 0, move: { x: 0, y: 0 } } : null;
+    if (walkState) {
+      setupTouchControls(walkState);
     } else {
       orbit = new OrbitControls(camera, canvas);
       orbit.enableDamping = true;
@@ -111,7 +105,49 @@
     }
 
     const clock = new THREE.Clock();
-    const billboards = []; // { mesh } — yaw toward camera each frame
+    const billboards = [];
+
+    // Mobile game controls: left thumb = virtual joystick (move), right side = drag-look.
+    function setupTouchControls(st) {
+      const base = document.createElement("div");
+      base.style.cssText = "position:fixed;width:120px;height:120px;border-radius:50%;border:2px solid rgba(255,255,255,.4);background:rgba(255,255,255,.08);display:none;pointer-events:none;z-index:5";
+      const knob = document.createElement("div");
+      knob.style.cssText = "position:absolute;width:54px;height:54px;left:31px;top:31px;border-radius:50%;background:rgba(255,255,255,.4)";
+      base.appendChild(knob); document.body.appendChild(base);
+      const R = 50, LOOK = 0.005;
+      let stickId = null, sx = 0, sy = 0, lookId = null, lx = 0, ly = 0;
+      const start = (id, x, y) => {
+        if (x < innerWidth * 0.5 && stickId === null) {
+          stickId = id; sx = x; sy = y;
+          base.style.left = (x - 60) + "px"; base.style.top = (y - 60) + "px";
+          base.style.display = "block"; knob.style.left = "31px"; knob.style.top = "31px";
+        } else if (lookId === null) { lookId = id; lx = x; ly = y; }
+      };
+      const move = (id, x, y) => {
+        if (id === stickId) {
+          let dx = x - sx, dy = y - sy; const len = Math.hypot(dx, dy) || 1; const c = Math.min(len, R);
+          dx = dx / len * c; dy = dy / len * c;
+          knob.style.left = (31 + dx) + "px"; knob.style.top = (31 + dy) + "px";
+          st.move.x = dx / R; st.move.y = -dy / R;
+        } else if (id === lookId) {
+          st.yaw -= (x - lx) * LOOK; st.pitch -= (y - ly) * LOOK;
+          st.pitch = Math.max(-1.4, Math.min(1.4, st.pitch)); lx = x; ly = y;
+        }
+      };
+      const end = (id) => {
+        if (id === stickId) { stickId = null; st.move.x = 0; st.move.y = 0; base.style.display = "none"; }
+        if (id === lookId) lookId = null;
+      };
+      addEventListener("touchstart", (e) => { for (const t of e.changedTouches) start(t.identifier, t.clientX, t.clientY); }, { passive: false });
+      addEventListener("touchmove", (e) => { for (const t of e.changedTouches) move(t.identifier, t.clientX, t.clientY); e.preventDefault(); }, { passive: false });
+      addEventListener("touchend", (e) => { for (const t of e.changedTouches) end(t.identifier); });
+      addEventListener("touchcancel", (e) => { for (const t of e.changedTouches) end(t.identifier); });
+      // mouse fallback for desktop testing
+      let md = false;
+      addEventListener("mousedown", (e) => { md = true; start("m", e.clientX, e.clientY); });
+      addEventListener("mousemove", (e) => { if (md) move("m", e.clientX, e.clientY); });
+      addEventListener("mouseup", () => { md = false; end("m"); });
+    }
 
     boot().catch(showError);
 
@@ -302,14 +338,13 @@
     renderer.setAnimationLoop(() => {
       const dt = clock.getDelta();
       if (orbit) orbit.update();
-      if (walk?.isLocked) {
-        const v = 2.2 * dt;
-        if (keys["KeyW"] || keys["ArrowUp"]) walk.moveForward(v);
-        if (keys["KeyS"] || keys["ArrowDown"]) walk.moveForward(-v);
-        if (keys["KeyA"] || keys["ArrowLeft"]) walk.moveRight(-v);
-        if (keys["KeyD"] || keys["ArrowRight"]) walk.moveRight(v);
-        if (keys["Space"]) camera.position.y += v;
-        if (keys["ShiftLeft"] || keys["ShiftRight"]) camera.position.y -= v;
+      if (walkState) {
+        camera.quaternion.setFromEuler(new THREE.Euler(walkState.pitch, walkState.yaw, 0, "YXZ"));
+        const speed = 2.5 * dt;
+        const yawE = new THREE.Euler(0, walkState.yaw, 0, "YXZ");
+        const fwd = new THREE.Vector3(0, 0, -1).applyEuler(yawE);
+        const right = new THREE.Vector3(1, 0, 0).applyEuler(yawE);
+        camera.position.addScaledVector(fwd, walkState.move.y * speed).addScaledVector(right, walkState.move.x * speed);
       }
       // Yaw-only billboarding: people pivot to face the camera but stay upright.
       camera.getWorldPosition(camPos);

@@ -181,9 +181,9 @@ try {
     world: { splatUrl: marble.splatUrl, model, worldId: marble.worldId },
     photo: { w: W, h: H },
     meshModel,
-    // SAM body meshes are untextured + Y-down: tell the viewer to project the
-    // cutout onto them and stand them upright, so the bare link just works.
-    render: { project: isBodyMesh, flipY: isBodyMesh },
+    // SAM body meshes are untextured but already Y-up: project the cutout onto
+    // them; no flip needed (the viewer can still override with ?flipy=1).
+    render: { project: isBodyMesh, flipY: false },
     people: people.map((p) => ({
       id: p.id, cutoutUrl: p.cutoutUrl, bbox: p.bbox, tightBbox: p.tightBbox, meshUrl: p.meshUrl,
     })),
