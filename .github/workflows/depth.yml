@@ -1,0 +1,54 @@
+name: Depth 3D-photo
+
+# Single image -> monocular depth map -> manifest for the depth.html 3D-photo
+# viewer. One consistent camera (correct perspective/positions by construction).
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/depth.yml" ]
+  workflow_dispatch:
+    inputs:
+      fal_key:
+        description: "fal API key (id:secret)"
+        required: true
+      image_path:
+        description: "Input photo path in repo"
+        required: false
+        default: "demo/boat.jpg"
+
+permissions:
+  contents: write
+
+jobs:
+  depth:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FAL_KEY: ${{ inputs.fal_key }}
+      IMAGE_PATH: ${{ inputs.image_path }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mask key
+        run: echo "::add-mask::${{ inputs.fal_key }}"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build depth photo
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+          node dist/depthRun.js "../$IMAGE_PATH" ../demo/depth
+          echo "--- depth.local.json ---"
+          cat ../demo/depth/depth.local.json
+      - name: Publish to ci-depth
+        if: always()
+        run: |
+          git config user.name "ci"; git config user.email "ci@local"
+          test -f demo/depth/depth.local.json || exit 0
+          git checkout --orphan ci-depth
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f demo/depth/depth.local.json
+          git commit -q -m "Depth photo $(date -u +%FT%TZ)"
+          git push -f origin ci-depth

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Diorama — 3D photo</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    #c { display: block; width: 100vw; height: 100vh; }
+    #hud { position: fixed; top: 12px; left: 0; right: 0; text-align: center;
+      font: 600 13px -apple-system, system-ui, sans-serif; color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
+    #err { position: fixed; inset: 0; display: none; place-items: center; padding: 24px;
+      font: 500 14px system-ui, sans-serif; color: #ffb4b4; text-align: center; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud">3D photo — drag to look around</div>
+  <div id="err"></div>
+
+  <script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+  } }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    // Lift a single photo into a camera-consistent 3D relief using its depth map.
+    // Everything in the photo shares one camera, so perspective + relative
+    // positions are correct by construction. Tunables (URL): fov, near, range,
+    // flip (invert depth), edge (skip triangles across big depth jumps), cols.
+    const params = new URLSearchParams(location.search);
+    const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
+    const TUNE = {
+      fov:   num("fov", 55),
+      near:  num("near", 2.0),
+      range: num("range", 7.0),
+      edge:  num("edge", 0.06),   // max depth delta across a quad before we drop it (holes vs rubber-sheet)
+      cols:  num("cols", 240),
+      flip:  params.get("flip") !== "0",  // Depth Anything: brighter = nearer → invert for distance
+    };
+
+    const hud = document.getElementById("hud"), errEl = document.getElementById("err");
+    const canvas = document.getElementById("c");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(TUNE.fov, innerWidth / innerHeight, 0.05, 1000);
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true; controls.dampingFactor = 0.08;
+    controls.minDistance = 0.2; controls.maxDistance = TUNE.near + TUNE.range;
+
+    boot().catch(showError);
+
+    async function boot() {
+      const depthManifest = params.get("depth");
+      let photoUrl = params.get("photo"), depthUrl = params.get("depthmap");
+      if (depthManifest) {
+        const m = await (await fetch(depthManifest, { cache: "no-store" })).json();
+        photoUrl = m.photo?.url || photoUrl; depthUrl = m.depthUrl || depthUrl;
+      }
+      if (!photoUrl || !depthUrl) throw new Error("need ?depth=<manifest> (or ?photo=&depthmap=)");
+
+      hud.textContent = "Loading…";
+      const [photoTex, depthImg] = await Promise.all([loadTex(photoUrl), loadImg(depthUrl)]);
+      photoTex.colorSpace = THREE.SRGBColorSpace;
+
+      buildRelief(photoTex, depthImg);
+      hud.textContent = "3D photo — drag to look around";
+    }
+
+    function buildRelief(photoTex, depthImg) {
+      const aspect = depthImg.width / depthImg.height;
+      const cols = Math.max(40, Math.round(TUNE.cols));
+      const rows = Math.max(30, Math.round(cols / aspect));
+
+      // Sample the depth map into a small grid.
+      const cv = document.createElement("canvas"); cv.width = cols; cv.height = rows;
+      const ctx = cv.getContext("2d"); ctx.drawImage(depthImg, 0, 0, cols, rows);
+      const data = ctx.getImageData(0, 0, cols, rows).data;
+      const depthAt = (i, j) => {
+        const d = data[(j * cols + i) * 4] / 255;     // grayscale → 0..1
+        return TUNE.flip ? 1 - d : d;
+      };
+
+      const tanY = Math.tan(THREE.MathUtils.degToRad(TUNE.fov) / 2);
+      const tanX = tanY * (innerWidth / innerHeight >= aspect ? aspect : aspect); // use image aspect for rays
+      const pos = [], uv = [], dist2d = [];
+      for (let j = 0; j < rows; j++) {
+        for (let i = 0; i < cols; i++) {
+          const u = i / (cols - 1), v = j / (rows - 1);
+          const dist = TUNE.near + depthAt(i, j) * TUNE.range;
+          const ndcx = u * 2 - 1, ndcy = (1 - v) * 2 - 1;
+          pos.push(ndcx * tanX * dist, ndcy * tanY * dist, -dist);
+          uv.push(u, 1 - v);
+          dist2d.push(dist);
+        }
+      }
+      // Build quads, dropping ones that straddle a big depth discontinuity.
+      const idx = [];
+      const span = (a, b, c, d) => Math.max(a, b, c, d) - Math.min(a, b, c, d);
+      const thresh = TUNE.edge * TUNE.range;
+      for (let j = 0; j < rows - 1; j++) {
+        for (let i = 0; i < cols - 1; i++) {
+          const a = j * cols + i, b = a + 1, c = a + cols, d = c + 1;
+          if (span(dist2d[a], dist2d[b], dist2d[c], dist2d[d]) > thresh) continue;
+          idx.push(a, c, b, b, c, d);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ map: photoTex, side: THREE.DoubleSide }));
+      scene.add(mesh);
+
+      // Look from the photo's camera (origin), pivot around the scene centre.
+      camera.position.set(0, 0, 0.001);
+      controls.target.set(0, 0, -(TUNE.near + TUNE.range * 0.45));
+      controls.update();
+    }
+
+    function loadTex(url) {
+      return new Promise((res, rej) => new THREE.TextureLoader().setCrossOrigin("anonymous")
+        .load(url, res, undefined, () => rej(new Error("tex: " + url))));
+    }
+    function loadImg(url) {
+      return new Promise((res, rej) => { const im = new Image(); im.crossOrigin = "anonymous";
+        im.onload = () => res(im); im.onerror = () => rej(new Error("img: " + url)); im.src = url; });
+    }
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+    renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+    function showError(e) { console.error(e); errEl.style.display = "grid"; errEl.textContent = "Error: " + (e?.message || e); }
+    addEventListener("error", (ev) => showError(ev.error || ev.message));
+  </script>
+</body>
+</html>
