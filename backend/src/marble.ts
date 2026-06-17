@@ -79,28 +79,32 @@ export async function generateWorldFromImage(
   let gen: any;
   try { gen = JSON.parse(genText); } catch { gen = {}; }
 
-  // Some APIs return the finished world inline; check first.
+  // worlds:generate returns a long-running operation { operation_id, done, response }.
+  const opId: string | undefined = gen.operation_id ?? extractWorldId(gen);
   let splat = extractSplatUrl(gen);
-  const worldId = extractWorldId(gen);
-  if (splat) return { splatUrl: splat, worldId: worldId ?? "", raw: gen };
-  if (!worldId) throw new Error("Marble: no world id; response=" + genText.slice(0, 900));
+  if (splat) return { splatUrl: splat, worldId: opId ?? "", raw: gen };
+  if (!opId) throw new Error("Marble: no operation_id; response=" + genText.slice(0, 900));
 
-  // Poll until a terminal state.
+  // Poll the operation until done.
   const pollMs = opts.pollMs ?? 5000;
   while (Date.now() < opts.deadline) {
     await new Promise((r) => setTimeout(r, pollMs));
-    const pr = await fetch(`${BASE}/worlds/${worldId}`, { headers: authHeaders() });
+    const pollUrl = `${BASE}/operations/${opId}`;
+    const pr = await fetch(pollUrl, { headers: authHeaders() });
     const pText = await pr.text();
-    if (!pr.ok) { console.error("Marble poll HTTP", pr.status, pText.slice(0, 300)); continue; }
-    let world: any; try { world = JSON.parse(pText); } catch { continue; }
-    const state = extractState(world);
-    console.error("Marble poll state:", state || "(none)");
-    splat = extractSplatUrl(world);
-    if (splat) return { splatUrl: splat, worldId, raw: world };
-    if (/(FAIL|ERROR|CANCEL)/.test(state)) {
-      console.error("Marble world body:", pText.slice(0, 1200));
-      throw new Error(`Marble world ${worldId} ${state}`);
+    // A wrong endpoint won't self-heal — surface it immediately.
+    if (pr.status === 404 || pr.status === 405)
+      throw new Error(`Marble poll ${pr.status} at ${pollUrl}: ${pText.slice(0, 200)}`);
+    if (!pr.ok) { console.error("Marble poll HTTP", pr.status, pText.slice(0, 200)); continue; }
+
+    let op: any; try { op = JSON.parse(pText); } catch { continue; }
+    console.error("Marble op done?", op.done, "error?", !!op.error);
+    if (op.error) throw new Error("Marble operation failed: " + JSON.stringify(op.error).slice(0, 400));
+    if (op.done) {
+      splat = extractSplatUrl(op);
+      if (splat) return { splatUrl: splat, worldId: opId, raw: op };
+      throw new Error("Marble done but no splat URL; response=" + pText.slice(0, 1500));
     }
   }
-  throw new Error("Marble: timed out waiting for world");
+  throw new Error("Marble: timed out waiting for operation " + opId);
 }
