@@ -55,6 +55,7 @@
     const params = new URLSearchParams(location.search);
     const DEFAULT_WORLD = "https://cdn.marble.worldlabs.ai/9306d551-be38-408e-b029-2bd3f431af29/0e2f4478-757f-46fa-8628-bc776fe1be27_ceramic_500k.spz";
     const sceneUrl = params.get("scene");
+    const PROJECT = params.has("project");   // projective-texture untextured meshes (e.g. SAM body) from the cutout
     const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
     const TUNE = {
       fov:   num("fov", 50),
@@ -159,7 +160,30 @@
 
         // Real 3D mesh when available; otherwise fall back to a billboard card.
         if (p.meshUrl) {
-          try { await placeMesh(gltfLoader, p.meshUrl, foot, worldH); return; }
+          // A mesh is just the person, so size/anchor it off the TIGHT bbox
+          // (the cutout card uses the looser expanded crop).
+          const tb = p.tightBbox || p.bbox;
+          const tFootN = { x: ((tb[0] + tb[2]) / 2) / W, y: tb[3] / H };
+          const tSizeN = (tb[3] - tb[1]) / H;
+          const worldHm = tSizeN * 2 * d * tanHalf;
+          const ndcM = new THREE.Vector3(tFootN.x * 2 - 1, -(tFootN.y * 2 - 1), 0.5).unproject(camera);
+          const footM = camera.position.clone().add(ndcM.sub(camera.position).normalize().multiplyScalar(d));
+          footM.y += TUNE.lift * worldHm;
+          try {
+            // Projective texturing: paint the person's cutout onto an untextured
+            // body mesh (SAM 3D Body). uvRect maps the mesh's front to the person
+            // region inside the cutout (which spans the looser crop).
+            let proj = null;
+            if (PROJECT) {
+              const cb = p.bbox, tb2 = p.tightBbox || p.bbox;
+              const cw = cb[2] - cb[0], ch = cb[3] - cb[1];
+              const tex = await loadTexture(loader, p.cutoutUrl);
+              tex.colorSpace = THREE.SRGBColorSpace;
+              proj = { tex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
+                       uvS: [(tb2[2] - tb2[0]) / cw, (tb2[3] - tb2[1]) / ch] };
+            }
+            await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj); return;
+          }
           catch (e) { console.warn("mesh failed, billboard fallback", p.id, e); }
         }
 
@@ -179,11 +203,13 @@
       }));
     }
 
-    // Load a GLB, scale it to `worldH`, and anchor its feet at `foot`.
-    function placeMesh(gltfLoader, url, foot, worldH) {
+    // Load a GLB, scale it to `worldH`, anchor its feet at `foot`. When `proj` is
+    // given, replace materials with a front-planar projection of the cutout.
+    function placeMesh(gltfLoader, url, foot, worldH, proj) {
       return new Promise((resolve, reject) => {
         gltfLoader.load(url, (gltf) => {
           const obj = gltf.scene;
+          if (proj) applyProjection(obj, proj);
           obj.rotation.y = TUNE.yaw;
           let box = new THREE.Box3().setFromObject(obj);
           const size = new THREE.Vector3(); box.getSize(size);
@@ -196,6 +222,40 @@
           scene.add(obj);
           resolve(obj);
         }, undefined, reject);
+      });
+    }
+
+    // Front-planar projection: map each mesh's local XY (front view) into the
+    // person region of the cutout, so the photo's clothing/face land on the mesh.
+    function applyProjection(obj, proj) {
+      obj.traverse((node) => {
+        if (!node.isMesh) return;
+        node.geometry.computeBoundingBox();
+        const bb = node.geometry.boundingBox;
+        node.material = new THREE.ShaderMaterial({
+          side: THREE.DoubleSide,
+          uniforms: {
+            map: { value: proj.tex },
+            bbMin: { value: new THREE.Vector2(bb.min.x, bb.min.y) },
+            bbSize: { value: new THREE.Vector2(bb.max.x - bb.min.x || 1, bb.max.y - bb.min.y || 1) },
+            uv0: { value: new THREE.Vector2(proj.uv0[0], proj.uv0[1]) },
+            uvS: { value: new THREE.Vector2(proj.uvS[0], proj.uvS[1]) },
+          },
+          vertexShader: `
+            varying vec2 vP;
+            void main() { vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+          `,
+          fragmentShader: `
+            uniform sampler2D map; uniform vec2 bbMin, bbSize, uv0, uvS; varying vec2 vP;
+            void main() {
+              vec2 n = (vP - bbMin) / bbSize;            // 0..1 across the mesh front
+              vec2 uv = uv0 + vec2(n.x, 1.0 - n.y) * uvS; // into the cutout's person region
+              vec4 c = texture2D(map, uv);
+              if (c.a < 0.4) discard;
+              gl_FragColor = vec4(c.rgb, 1.0);
+            }
+          `,
+        });
       });
     }
 
