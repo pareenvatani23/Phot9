@@ -23,12 +23,16 @@
   <div id="hud">Diorama — drag to orbit</div>
   <div id="err"></div>
 
+  <!-- Spark must share a SINGLE three.js instance, or its `splatDefines` shader
+       chunk registers on a different THREE than the renderer and `#include
+       <splatDefines>` fails to resolve. Use the official Spark CDN build + a
+       bare-imported three (deduped via the import map). -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://esm.sh/three@0.169.0",
-      "three/addons/": "https://esm.sh/three@0.169.0/examples/jsm/",
-      "@sparkjsdev/spark": "https://esm.sh/@sparkjsdev/spark@0.1.8"
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
     }
   }
   </script>
