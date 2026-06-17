@@ -1,0 +1,43 @@
+{
+  "ok": true,
+  "model": "marble-1.1",
+  "numPeople": 1,
+  "sceneUrl": "https://v3b.fal.media/files/b/0a9ea80c/ygHvWCYVM7XrdmBlHzMg0_scene.json",
+  "viewerUrl": "https://pareenvatani23.github.io/Phot9/?scene=https%3A%2F%2Fv3b.fal.media%2Ffiles%2Fb%2F0a9ea80c%2FygHvWCYVM7XrdmBlHzMg0_scene.json",
+  "cleanUrl": "https://v3b.fal.media/files/b/0a9ea7e9/br2WIpaEjO9D95TaGAja6_e0662a4570d34174bf969673ca336aac.png",
+  "scene": {
+    "world": {
+      "splatUrl": "https://cdn.marble.worldlabs.ai/8a020797-4144-48c4-b8cb-b1d7924ce348/35b406c7-890c-4ec0-9c7e-acd1855769a7_ceramic_500k.spz",
+      "model": "marble-1.1",
+      "worldId": "ddca87ca-1c3f-4bb9-81d7-1bf303afa409"
+    },
+    "photo": {
+      "w": 740,
+      "h": 493
+    },
+    "meshModel": "tripo",
+    "render": {
+      "project": false,
+      "flipY": false
+    },
+    "people": [
+      {
+        "id": 0,
+        "cutoutUrl": "https://v3b.fal.media/files/b/0a9ea7e7/kjHUTZJjeuDIG5RGd05C6_person0.png",
+        "bbox": [
+          272,
+          270,
+          427,
+          493
+        ],
+        "tightBbox": [
+          283.45,
+          285.66,
+          416.01,
+          478.01
+        ],
+        "meshUrl": "https://v3b.fal.media/files/b/0a9ea7ef/5fcSSGhqVsSKlIKtBKwPx_tripo_model_9f945c0b-0140-4a6b-afc5-578060cf6b07.glb"
+      }
+    ]
+  }
+}
