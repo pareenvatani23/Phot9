@@ -38,10 +38,11 @@
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
     import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
-    // World splat URL comes from ?world=<url> (a Marble SPZ/PLY). Falls back to
-    // Spark's public sample so the viewer is testable without a generated world.
+    // World splat URL comes from ?world=<url> (a Marble SPZ/PLY). Defaults to the
+    // latest Marble world generated from the demo photo.
     const params = new URLSearchParams(location.search);
-    const worldURL = params.get("world") || "https://sparkjs.dev/assets/splats/butterfly.spz";
+    const DEFAULT_WORLD = "https://cdn.marble.worldlabs.ai/9306d551-be38-408e-b029-2bd3f431af29/0e2f4478-757f-46fa-8628-bc776fe1be27_ceramic_500k.spz";
+    const worldURL = params.get("world") || DEFAULT_WORLD;
     const hud = document.getElementById("hud");
     const errEl = document.getElementById("err");
 
