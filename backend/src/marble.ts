@@ -63,7 +63,7 @@ export async function generateWorldFromImage(
   const body = {
     display_name: opts.displayName ?? "diorama",
     model,
-    world_prompt: { type: "image", image_prompt: { source: "url", image_url: imageUrl } },
+    world_prompt: { type: "image", image_prompt: { source: "uri", uri: imageUrl } },
   };
 
   console.error("Marble: POST /worlds:generate", JSON.stringify({ model, image_url: imageUrl }));

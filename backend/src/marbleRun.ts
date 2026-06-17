@@ -1,7 +1,8 @@
 /**
  * Minimal Marble smoke-run: image -> public URL (via fal storage) -> Marble world
- * -> write { splatUrl, worldId } to <outDir>/marble.json. Isolated from the heavy
- * SAM/depth pipeline so we can validate World Labs cheaply (use the draft model).
+ * -> write { ok, splatUrl, worldId } (or { ok:false, error }) to <outDir>/marble.json.
+ * Never throws / always exits 0 so the workflow can publish the result file and we
+ * can read schema-discovery errors cheaply from one tiny artifact.
  *
  *   FAL_KEY=… WORLDLABS_API_KEY=… MARBLE_MODEL=marble-1.0-draft \
  *     node dist/marbleRun.js <imagePath> <outDir>
@@ -17,21 +18,23 @@ if (!imgPath || !outDir) {
   process.exit(1);
 }
 
-const image = await fs.readFile(imgPath);
 await fs.mkdir(outDir, { recursive: true });
-const isPng = imgPath.toLowerCase().endsWith(".png");
-
-console.error("Uploading image to fal storage for a public URL…");
-const imageUrl = await uploadToFal(image, isPng ? "image/png" : "image/jpeg", `input.${isPng ? "png" : "jpg"}`);
-console.error("image_url:", imageUrl);
-
+const outFile = path.join(outDir, "marble.json");
 const model = process.env.MARBLE_MODEL || "marble-1.0-draft";
-const deadline = Date.now() + 15 * 60 * 1000; // 15 min — world gen can take minutes
-const result = await generateWorldFromImage(imageUrl, { model, deadline, displayName: "diorama" });
 
-console.error("Marble splatUrl:", result.splatUrl);
-await fs.writeFile(
-  path.join(outDir, "marble.json"),
-  JSON.stringify({ splatUrl: result.splatUrl, worldId: result.worldId, model }, null, 2)
-);
-console.error("Wrote", path.join(outDir, "marble.json"));
+try {
+  const image = await fs.readFile(imgPath);
+  const isPng = imgPath.toLowerCase().endsWith(".png");
+  console.error("Uploading image to fal storage for a public URL…");
+  const imageUrl = await uploadToFal(image, isPng ? "image/png" : "image/jpeg", `input.${isPng ? "png" : "jpg"}`);
+  console.error("image_url:", imageUrl);
+
+  const deadline = Date.now() + 15 * 60 * 1000; // 15 min — world gen can take minutes
+  const result = await generateWorldFromImage(imageUrl, { model, deadline, displayName: "diorama" });
+  console.error("Marble splatUrl:", result.splatUrl);
+  await fs.writeFile(outFile, JSON.stringify({ ok: true, model, splatUrl: result.splatUrl, worldId: result.worldId }, null, 2));
+} catch (e) {
+  const error = e instanceof Error ? e.message : String(e);
+  console.error("Marble run error:", error);
+  await fs.writeFile(outFile, JSON.stringify({ ok: false, model, error }, null, 2));
+}
