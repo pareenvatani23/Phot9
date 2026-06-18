@@ -138,6 +138,14 @@ def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
     with open(os.path.join(examples, fname), "wb") as f:
         f.write(image_bytes)
 
+    # Pre-download the pipeline to a LOCAL folder. Passing a remote repo id makes
+    # diffusers' download() try to fetch the custom UNet as a .py inside the HF
+    # repo (it isn't there — that code lives in the cloned repo on sys.path) and
+    # fail. A local path skips download-validation and imports the class normally.
+    from huggingface_hub import snapshot_download
+    local_ckpt = snapshot_download("pengHTYX/PSHuman_Unclip_768_6views")
+    print(f"LOCAL_CKPT {local_ckpt}")
+
     try:
         # Stage 1: background removal -> white-bg RGBA the model expects.
         subprocess.run(
@@ -149,7 +157,7 @@ def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
             [
                 "python", "inference.py",
                 "--config", "configs/inference-768-6view.yaml",
-                "pretrained_model_name_or_path=pengHTYX/PSHuman_Unclip_768_6views",
+                f"pretrained_model_name_or_path={local_ckpt}",
                 f"validation_dataset.crop_size={crop_size}",
                 "with_smpl=false",
                 "validation_dataset.root_dir=examples",
