@@ -7,6 +7,9 @@ name: PSHuman quality probe (free, via HF Space)
 # Results (mesh + turntable video) are published to the `ci-pshuman` orphan
 # branch and uploaded as an artifact.
 on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/pshuman-probe.yml", "gpu/probe_pshuman.py" ]
   workflow_dispatch:
     inputs:
       mode:
