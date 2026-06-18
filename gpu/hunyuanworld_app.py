@@ -75,6 +75,9 @@ image = (
         "wget -q https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/encoder.onnx && "
         "wget -q https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/decoder.onnx",
     )
+    # transformers 4.51 requires huggingface-hub <1.0; an unpinned install pulled
+    # 1.20. Pin it last so the final env is compatible (cheap appended layer).
+    .pip_install("huggingface_hub==0.34.0")
 )
 
 
