@@ -1,27 +1,27 @@
-name: Marble world smoke test
+name: Marble world generation
 
-# Validates the World Labs Marble path cheaply and in isolation from the heavy
-# SAM/depth pipeline: uploads demo/input.jpg to fal storage for a public URL,
-# generates a (draft) Marble world, and logs the resulting SPZ splat URL.
+# Generates a World Labs Marble world from a photo: uploads the image to fal
+# storage for a public URL, calls Marble, logs + publishes the resulting SPZ
+# splat URL to the ci-marble branch.
 #
-# Dispatch with the fal key + World Labs key. Both are masked. Uses the draft
-# model by default (~150 credits ≈ $0.12); set model input to marble-1.1 for full.
+# Keys are read from repo secrets (FAL_KEY, WORLDLABS_API_KEY). Choose the image
+# and model at dispatch. marble-1.1 = full quality (~$1.20 of World Labs credit);
+# marble-1.0-draft = cheap preview (~$0.12). NOTE: this spends World Labs/fal
+# credit, which is separate from the Modal GPU budget.
 on:
   push:
     branches: [ "claude/diorama-build-spec-h6906m" ]
     paths: [ ".github/workflows/marble.yml" ]
   workflow_dispatch:
     inputs:
-      fal_key:
-        description: "fal API key (id:secret) — used only to host the image"
-        required: true
-      worldlabs_key:
-        description: "World Labs API key (WLT-Api-Key)"
-        required: true
-      model:
-        description: "Marble model"
+      image:
+        description: "image path in repo (e.g. demo/hiker.jpg)"
         required: false
-        default: "marble-1.0-draft"
+        default: "demo/input.jpg"
+      model:
+        description: "Marble model (marble-1.1 full | marble-1.0-draft cheap)"
+        required: false
+        default: "marble-1.1"
 
 permissions:
   contents: write
@@ -32,16 +32,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      FAL_KEY: ${{ inputs.fal_key }}
-      WORLDLABS_API_KEY: ${{ inputs.worldlabs_key }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      WORLDLABS_API_KEY: ${{ secrets.WORLDLABS_API_KEY }}
       MARBLE_MODEL: ${{ inputs.model }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mask keys
+      - name: Check secrets present
         run: |
-          echo "::add-mask::${{ inputs.fal_key }}"
-          echo "::add-mask::${{ inputs.worldlabs_key }}"
+          test -n "$FAL_KEY" || { echo "::error::FAL_KEY secret not set"; exit 1; }
+          test -n "$WORLDLABS_API_KEY" || { echo "::error::WORLDLABS_API_KEY secret not set"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
@@ -52,7 +52,7 @@ jobs:
         run: |
           npm ci
           npm run build
-          node dist/marbleRun.js ../demo/input.jpg ../demo/marble
+          node dist/marbleRun.js "../${{ inputs.image }}" ../demo/marble
           echo "--- marble.json ---"
           cat ../demo/marble/marble.json
 
