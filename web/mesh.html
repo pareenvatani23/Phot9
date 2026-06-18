@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phot9 — 3D mesh viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1d22; color: #ddd;
+    font-family: system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 10px; left: 12px; font-size: 13px; opacity: .8;
+    pointer-events: none; line-height: 1.4; }
+  #status { position: fixed; bottom: 12px; left: 12px; font-size: 13px; opacity: .9; }
+  a { color: #7db4ff; }
+</style>
+</head>
+<body>
+<div id="hud">Phot9 mesh viewer<br>drag = orbit · scroll = zoom · right-drag = pan</div>
+<div id="status">loading…</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+
+const statusEl = document.getElementById("status");
+const params = new URLSearchParams(location.search);
+// Mesh URL: ?model=<url>. Defaults to the latest published result on ci-pshuman.
+const MODEL = params.get("model")
+  || "https://raw.githubusercontent.com/pareenvatani23/Phot9/ci-pshuman/out/result_clr_scale4_man_rmbg.obj";
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1b1d22);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 1000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+// Lights (used only if the mesh lacks vertex colors).
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.1));
+const dir = new THREE.DirectionalLight(0xffffff, 1.0); dir.position.set(1, 2, 2); scene.add(dir);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+new OBJLoader().load(MODEL, (obj) => {
+  obj.traverse((c) => {
+    if (c.isMesh) {
+      const hasColors = !!c.geometry.getAttribute("color");
+      c.material = new THREE.MeshStandardMaterial({
+        vertexColors: hasColors,
+        color: hasColors ? 0xffffff : 0xb0b4bd,
+        roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide,
+      });
+    }
+  });
+  // Center + frame the model.
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  obj.position.sub(center);
+  const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
+  camera.position.set(0, 0, radius * 3.2);
+  controls.target.set(0, 0, 0);
+  controls.update();
+  scene.add(obj);
+  statusEl.innerHTML = `loaded · ${MODEL.split("/").pop()}`;
+}, (e) => {
+  if (e.total) statusEl.textContent = `loading… ${(100 * e.loaded / e.total).toFixed(0)}%`;
+}, (err) => {
+  statusEl.innerHTML = "failed to load mesh — it may still be generating. " +
+    "<a href='javascript:location.reload()'>retry</a>";
+  console.error(err);
+});
+
+let spin = true;
+renderer.domElement.addEventListener("pointerdown", () => { spin = false; });
+(function animate() {
+  requestAnimationFrame(animate);
+  if (spin && scene.children.length) {
+    const m = scene.children.find((o) => o.type === "Group");
+    if (m) m.rotation.y += 0.004;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
