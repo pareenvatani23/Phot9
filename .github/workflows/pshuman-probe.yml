@@ -28,11 +28,6 @@ on:
         description: "extra positional args after image, JSON list (run mode)"
         required: false
         default: "[]"
-      hf_token:
-        description: "HF token (recommended for ZeroGPU)"
-        required: false
-        default: ""
-
 permissions:
   contents: write
 
@@ -41,13 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      HF_TOKEN: ${{ inputs.hf_token }}
+      # Stored as a repo secret (Settings -> Secrets -> Actions). Needed because
+      # the Space's ZeroGPU duration (140s) exceeds the anonymous allowance.
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Mask token
-        if: inputs.hf_token != ''
-        run: echo "::add-mask::${{ inputs.hf_token }}"
 
       - uses: actions/setup-python@v5
         with:
