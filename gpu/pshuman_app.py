@@ -57,7 +57,10 @@ image = (
     # has no torch (the "No module named 'torch'" build failure).
     .run_commands(
         f"git clone {REPO} /root/PSHuman",
-        "pip install -U pip setuptools wheel ninja",
+        # Pin setuptools<70: torch 2.1's cpp_extension imports
+        # `from pkg_resources import packaging`, which modern setuptools (>=81)
+        # removed. 69.x still ships it.
+        "pip install -U pip && pip install 'setuptools==69.5.1' wheel ninja",
         "cd /root/PSHuman && pip install --no-build-isolation -r requirements.txt",
     )
     # Non-gated SMPL-X / ECON assets mirror (avoids the smpl-x.is.tue.mpg.de gate).
