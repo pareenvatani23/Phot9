@@ -82,10 +82,18 @@ image = (
         "pip install --no-build-isolation -r req_src.txt",
     )
     # Non-gated SMPL-X / ECON assets mirror (avoids the smpl-x.is.tue.mpg.de gate).
-    # Lands under /root/PSHuman/data to match the expected data/ layout.
+    # PSHuman's SMPLX class reads ./smpl_related/... (cwd-relative) while pymaf
+    # reads ./data/... — locate the assets by a known file and symlink both roots
+    # so we don't depend on the bundle's exact top-level nesting.
     .run_commands(
         "huggingface-cli download fffiloni/PSHuman-SMPL-related "
-        "--repo-type model --local-dir /root/PSHuman/data"
+        "--repo-type model --local-dir /root/PSHuman/smpl_bundle",
+        "cd /root/PSHuman && "
+        "F=$(find smpl_bundle -name smplx_faces.npy | head -1) && "
+        "REL=$(dirname $(dirname \"$F\")) && "
+        "ln -sfn \"$(realpath \"$REL\")\" smpl_related && "
+        "ln -sfn \"$(realpath \"$(dirname \"$REL\")\")\" data && "
+        "echo LINKED && ls -la smpl_related/smpl_data | head",
     )
     # Don't pin HF_HOME here: the build populates the default cache, and we mount
     # the runtime weights volume at a separate clean path (see the function).
