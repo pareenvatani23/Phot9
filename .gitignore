@@ -1,0 +1,5 @@
+
+# Local CI artifacts (meshes/previews live on ci-pshuman branch)
+out/
+__pycache__/
+*.pyc
