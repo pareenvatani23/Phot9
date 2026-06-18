@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Diorama — Gaussian world</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; }
+    #c { display: block; width: 100vw; height: 100vh; }
+    #hud {
+      position: fixed; top: 12px; left: 0; right: 0; text-align: center;
+      font: 600 13px -apple-system, system-ui, sans-serif; color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none;
+    }
+    #err {
+      position: fixed; inset: 0; display: none; place-items: center; padding: 24px;
+      font: 500 14px -apple-system, system-ui, sans-serif; color: #ffb4b4; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="hud">Diorama — drag to orbit</div>
+  <div id="err"></div>
+
+  <!-- Spark must share a SINGLE three.js instance, or its `splatDefines` shader
+       chunk registers on a different THREE than the renderer and `#include
+       <splatDefines>` fails to resolve. Use the official Spark CDN build + a
+       bare-imported three (deduped via the import map). -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+
+    // ── Inputs ───────────────────────────────────────────────────────────────
+    // Two modes:
+    //   ?scene=<scene.json>  → Marble world + people billboards (the hybrid scene)
+    //   ?world=<spz-url>     → just a bare Marble world (no people)
+    // Placement tunables (override per-scene for visual tuning, no redeploy):
+    //   fov   vertical FOV degrees        (default 50)
+    //   cam   initial camera distance     (default 2.6)
+    //   depth distance to the median person along the view ray (default 2.0)
+    //   lift  vertical nudge of feet, in person-heights (default 0)
+    const params = new URLSearchParams(location.search);
+    const DEFAULT_WORLD = "https://cdn.marble.worldlabs.ai/9306d551-be38-408e-b029-2bd3f431af29/0e2f4478-757f-46fa-8628-bc776fe1be27_ceramic_500k.spz";
+    const sceneUrl = params.get("scene");
+    const PROJECT = params.has("project");   // projective-texture untextured meshes (e.g. SAM body) from the cutout
+    // flip override: ?flipy=1 force on, ?flipy=0 force off, absent = use manifest
+    const FLIP_OVERRIDE = params.has("flipy") ? params.get("flipy") !== "0" : null;
+    const MODE = params.get("mode") || "orbit";   // orbit | walk
+    const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
+    const TUNE = {
+      fov:   num("fov", 50),
+      cam:   num("cam", 2.6),
+      depth: num("depth", 2.0),
+      lift:  num("lift", 0),
+      yaw:   num("yaw", 0),    // extra rotation about Y (radians)
+      rotx:  num("rotx", 0),   // extra rotation about X
+      rotz:  num("rotz", 0),   // extra rotation about Z
+    };
+
+    const hud = document.getElementById("hud");
+    const errEl = document.getElementById("err");
+    const canvas = document.getElementById("c");
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(TUNE.fov, innerWidth / innerHeight, 0.01, 1000);
+    camera.position.set(0, 0, TUNE.cam);
+
+    const spark = new SparkRenderer({ renderer });
+    scene.add(spark);
+
+    // Lights for textured GLB people (splats are unlit and ignore these).
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, 2.0));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(0.5, 1, 1.2);
+    scene.add(sun);
+
+    // ── Controls: orbit (default) or mobile first-person walk (?mode=walk) ───
+    let orbit = null;
+    const walkState = MODE === "walk" ? { yaw: 0, pitch: 0, move: { x: 0, y: 0 } } : null;
+    if (walkState) {
+      setupTouchControls(walkState);
+    } else {
+      orbit = new OrbitControls(camera, canvas);
+      orbit.enableDamping = true;
+      orbit.dampingFactor = 0.08;
+      orbit.autoRotate = true;          // gentle idle motion (demo)
+      orbit.autoRotateSpeed = 0.5;
+    }
+
+    const clock = new THREE.Clock();
+    const billboards = [];
+    const peopleObjs = [];  // { billboard, mesh } per person — toggled by 2D/3D mode
+    let peopleMode = params.get("people") === "2d" ? "2d" : "3d";
+
+    // Mobile game controls: left thumb = virtual joystick (move), right side = drag-look.
+    function setupTouchControls(st) {
+      const base = document.createElement("div");
+      base.style.cssText = "position:fixed;width:120px;height:120px;border-radius:50%;border:2px solid rgba(255,255,255,.4);background:rgba(255,255,255,.08);display:none;pointer-events:none;z-index:5";
+      const knob = document.createElement("div");
+      knob.style.cssText = "position:absolute;width:54px;height:54px;left:31px;top:31px;border-radius:50%;background:rgba(255,255,255,.4)";
+      base.appendChild(knob); document.body.appendChild(base);
+      const R = 50, LOOK = 0.005;
+      let stickId = null, sx = 0, sy = 0, lookId = null, lx = 0, ly = 0;
+      const start = (id, x, y) => {
+        if (x < innerWidth * 0.5 && stickId === null) {
+          stickId = id; sx = x; sy = y;
+          base.style.left = (x - 60) + "px"; base.style.top = (y - 60) + "px";
+          base.style.display = "block"; knob.style.left = "31px"; knob.style.top = "31px";
+        } else if (lookId === null) { lookId = id; lx = x; ly = y; }
+      };
+      const move = (id, x, y) => {
+        if (id === stickId) {
+          let dx = x - sx, dy = y - sy; const len = Math.hypot(dx, dy) || 1; const c = Math.min(len, R);
+          dx = dx / len * c; dy = dy / len * c;
+          knob.style.left = (31 + dx) + "px"; knob.style.top = (31 + dy) + "px";
+          st.move.x = dx / R; st.move.y = -dy / R;
+        } else if (id === lookId) {
+          st.yaw -= (x - lx) * LOOK; st.pitch -= (y - ly) * LOOK;
+          st.pitch = Math.max(-1.4, Math.min(1.4, st.pitch)); lx = x; ly = y;
+        }
+      };
+      const end = (id) => {
+        if (id === stickId) { stickId = null; st.move.x = 0; st.move.y = 0; base.style.display = "none"; }
+        if (id === lookId) lookId = null;
+      };
+      addEventListener("touchstart", (e) => { for (const t of e.changedTouches) start(t.identifier, t.clientX, t.clientY); }, { passive: false });
+      addEventListener("touchmove", (e) => { for (const t of e.changedTouches) move(t.identifier, t.clientX, t.clientY); e.preventDefault(); }, { passive: false });
+      addEventListener("touchend", (e) => { for (const t of e.changedTouches) end(t.identifier); });
+      addEventListener("touchcancel", (e) => { for (const t of e.changedTouches) end(t.identifier); });
+      // mouse fallback for desktop testing
+      let md = false;
+      addEventListener("mousedown", (e) => { md = true; start("m", e.clientX, e.clientY); });
+      addEventListener("mousemove", (e) => { if (md) move("m", e.clientX, e.clientY); });
+      addEventListener("mouseup", () => { md = false; end("m"); });
+    }
+
+    boot().catch(showError);
+
+    async function boot() {
+      let worldURL = params.get("world") || DEFAULT_WORLD;
+      let manifest = null;
+
+      if (sceneUrl) {
+        hud.textContent = "Loading scene…";
+        const res = await fetch(sceneUrl, { cache: "no-store" });
+        if (!res.ok) throw new Error(`scene.json ${res.status}`);
+        manifest = await res.json();
+        worldURL = manifest.world?.splatUrl || worldURL;
+      }
+
+      // ── The Gaussian world ────────────────────────────────────────────────
+      const world = new SplatMesh({ url: worldURL });
+      scene.add(world);
+      // Spark splats are Y-down relative to three's Y-up; flip upright.
+      world.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+
+      // ── People billboards (hybrid scene only) ─────────────────────────────
+      if (manifest?.people?.length) {
+        hud.textContent = `Loading ${manifest.people.length} people…`;
+        await addPeople(manifest);
+      }
+
+      hud.textContent = MODE === "walk"
+        ? "Click to walk · WASD · mouse look · Esc release"
+        : "Diorama — drag to orbit";
+    }
+
+    async function addPeople(manifest) {
+      const W = manifest.photo?.w, H = manifest.photo?.h;
+      if (!W || !H) throw new Error("scene.json missing photo {w,h}");
+      // Manifest can request projection/flip (SAM body meshes); query params override.
+      const doProject = PROJECT || !!manifest.render?.project;
+      const doFlip = FLIP_OVERRIDE !== null ? FLIP_OVERRIDE : !!manifest.render?.flipY;
+
+      // Normalised geometry per person from the photo-space bbox.
+      const people = manifest.people.map((p) => {
+        const [x0, y0, x1, y1] = p.bbox;
+        const footN = { x: ((x0 + x1) / 2) / W, y: y1 / H };  // bottom-center
+        const sizeN = (y1 - y0) / H;                          // height fraction
+        const aspect = (x1 - x0) / (y1 - y0);
+        return { ...p, footN, sizeN, aspect };
+      });
+
+      // Median height → reference depth. Equal-real-height assumption gives each
+      // person a relative depth (bigger in photo ⇒ nearer the camera).
+      const sizes = people.map((p) => p.sizeN).sort((a, b) => a - b);
+      const medSize = sizes[Math.floor(sizes.length / 2)] || 0.3;
+      const tanHalf = Math.tan(THREE.MathUtils.degToRad(TUNE.fov) / 2);
+
+      const loader = new THREE.TextureLoader();
+      loader.setCrossOrigin("anonymous");
+      const gltfLoader = new GLTFLoader();
+      gltfLoader.setCrossOrigin("anonymous");
+
+      await Promise.all(people.map(async (p) => {
+        const d = TUNE.depth * (medSize / p.sizeN);            // per-person distance
+        const worldH = p.sizeN * 2 * d * tanHalf;              // projected height match
+
+        // Foot point: unproject the foot pixel along the view ray at distance d.
+        const ndc = new THREE.Vector3(p.footN.x * 2 - 1, -(p.footN.y * 2 - 1), 0.5);
+        ndc.unproject(camera);
+        const dir = ndc.sub(camera.position).normalize();
+        const foot = camera.position.clone().add(dir.multiplyScalar(d));
+        foot.y += TUNE.lift * worldH;
+
+        // ── 2D billboard (always built; the photo cutout as a card) ──────────
+        const tex = await loadTexture(loader, p.cutoutUrl);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const worldW = worldH * (p.aspect || 0.45);
+        const bb = new THREE.Mesh(
+          new THREE.PlaneGeometry(worldW, worldH),
+          new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5,
+            depthWrite: true, side: THREE.DoubleSide, toneMapped: false }));
+        bb.position.copy(foot).add(new THREE.Vector3(0, worldH / 2, 0));
+        bb.renderOrder = 10;
+        scene.add(bb); billboards.push({ mesh: bb });
+
+        // ── 3D mesh (when available) ─────────────────────────────────────────
+        let meshObj = null;
+        if (p.meshUrl) {
+          try {
+            const tb = p.tightBbox || p.bbox;
+            const tFootN = { x: ((tb[0] + tb[2]) / 2) / W, y: tb[3] / H };
+            const tSizeN = (tb[3] - tb[1]) / H;
+            const worldHm = tSizeN * 2 * d * tanHalf;
+            const ndcM = new THREE.Vector3(tFootN.x * 2 - 1, -(tFootN.y * 2 - 1), 0.5).unproject(camera);
+            const footM = camera.position.clone().add(ndcM.sub(camera.position).normalize().multiplyScalar(d));
+            footM.y += TUNE.lift * worldHm;
+            let proj = null;
+            if (doProject) {
+              const cb = p.bbox, tb2 = p.tightBbox || p.bbox;
+              const cw = cb[2] - cb[0], ch = cb[3] - cb[1];
+              const ptex = await makeProjTexture(p.cutoutUrl);
+              proj = { tex: ptex, uv0: [(tb2[0] - cb[0]) / cw, (tb2[1] - cb[1]) / ch],
+                       uvS: [(tb2[2] - tb2[0]) / cw, (tb2[3] - tb2[1]) / ch] };
+            }
+            const perYaw = num("yaw" + p.id, 0);   // per-person facing override
+            meshObj = await placeMesh(gltfLoader, p.meshUrl, footM, worldHm, proj, doFlip, perYaw);
+            scene.add(meshObj);
+          } catch (e) { console.warn("mesh failed, 2D only for person", p.id, e); meshObj = null; }
+        }
+        peopleObjs.push({ billboard: bb, mesh: meshObj });
+      }));
+
+      applyPeopleMode();
+      if (peopleObjs.some((o) => o.mesh)) buildModeToggle();
+    }
+
+    // Show billboards (2D) or meshes (3D); people without a mesh stay 2D.
+    function applyPeopleMode() {
+      for (const o of peopleObjs) {
+        const has3d = !!o.mesh;
+        o.billboard.visible = peopleMode === "2d" || !has3d;
+        if (o.mesh) o.mesh.visible = peopleMode === "3d";
+      }
+    }
+
+    // Segmented 2D | 3D switch, top-center.
+    function buildModeToggle() {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "position:fixed;top:40px;left:50%;transform:translateX(-50%);display:flex;gap:2px;background:rgba(0,0,0,.45);border-radius:999px;padding:4px;z-index:6;font:600 13px -apple-system,system-ui,sans-serif;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)";
+      const mk = (label, val) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText = "border:0;border-radius:999px;padding:7px 18px;color:#fff;background:transparent;cursor:pointer";
+        b.onclick = () => { peopleMode = val; applyPeopleMode(); style(); };
+        return b;
+      };
+      const b2 = mk("2D", "2d"), b3 = mk("3D", "3d");
+      const style = () => {
+        for (const [b, v] of [[b2, "2d"], [b3, "3d"]]) {
+          const on = peopleMode === v;
+          b.style.background = on ? "#fff" : "transparent";
+          b.style.color = on ? "#000" : "#fff";
+        }
+      };
+      wrap.append(b2, b3); document.body.appendChild(wrap); style();
+    }
+
+    // Load a GLB, scale it to `worldH`, anchor its feet at `foot`. When `proj` is
+    // given, replace materials with a front-planar projection of the cutout.
+    function placeMesh(gltfLoader, url, foot, worldH, proj, flip, perYaw = 0) {
+      return new Promise((resolve, reject) => {
+        gltfLoader.load(url, (gltf) => {
+          const obj = gltf.scene;
+          if (proj) applyProjection(obj, proj);
+          // Flip = 180° about the camera-forward (Z) axis: turns a Y-down mesh
+          // upright while keeping its front toward the camera. yaw + perYaw aim
+          // each person's facing. Rotation (not negative scale) so it's robust.
+          obj.rotation.set(TUNE.rotx, TUNE.yaw + perYaw, TUNE.rotz + (flip ? Math.PI : 0));
+          let box = new THREE.Box3().setFromObject(obj);
+          const size = new THREE.Vector3(); box.getSize(size);
+          const s = worldH / (size.y || 1);
+          obj.scale.setScalar(s);
+          box = new THREE.Box3().setFromObject(obj);
+          const c = new THREE.Vector3(); box.getCenter(c);
+          obj.position.x += foot.x - c.x;          // centre horizontally on the foot point
+          obj.position.z += foot.z - c.z;
+          obj.position.y += foot.y - box.min.y;    // drop feet onto the ground point
+          resolve(obj);                            // caller adds to the scene
+        }, undefined, reject);
+      });
+    }
+
+    // Front-planar projection: map each mesh's local XY (front view) into the
+    // person region of the cutout, so the photo's clothing/face land on the mesh.
+    function applyProjection(obj, proj) {
+      obj.traverse((node) => {
+        if (!node.isMesh) return;
+        node.geometry.computeBoundingBox();
+        const bb = node.geometry.boundingBox;
+        node.material = new THREE.ShaderMaterial({
+          side: THREE.DoubleSide,
+          uniforms: {
+            map: { value: proj.tex },
+            bbMin: { value: new THREE.Vector2(bb.min.x, bb.min.y) },
+            bbSize: { value: new THREE.Vector2(bb.max.x - bb.min.x || 1, bb.max.y - bb.min.y || 1) },
+            uv0: { value: new THREE.Vector2(proj.uv0[0], proj.uv0[1]) },
+            uvS: { value: new THREE.Vector2(proj.uvS[0], proj.uvS[1]) },
+          },
+          vertexShader: `
+            varying vec2 vP; varying vec3 vN;
+            void main() { vP = position.xy; vN = normalize(normalMatrix * normal);
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+          `,
+          fragmentShader: `
+            uniform sampler2D map; uniform vec2 bbMin, bbSize, uv0, uvS; varying vec2 vP; varying vec3 vN;
+            void main() {
+              vec2 n = (vP - bbMin) / bbSize;            // 0..1 across the mesh front
+              vec2 uv = uv0 + vec2(n.x, 1.0 - n.y) * uvS; // into the cutout's person region
+              vec4 c = texture2D(map, uv);
+              if (c.a < 0.04) discard;                   // only fully-empty; mesh defines the silhouette
+              // Gentle form shading on top of the baked photo lighting.
+              float diff = max(dot(normalize(vN), normalize(vec3(0.4, 0.7, 0.8))), 0.0);
+              float shade = 0.82 + 0.18 * diff;
+              gl_FragColor = vec4(c.rgb * shade, 1.0);
+            }
+          `,
+        });
+      });
+    }
+
+    function loadTexture(loader, url) {
+      return new Promise((resolve, reject) =>
+        loader.load(url, resolve, undefined, () => reject(new Error("texture: " + url))));
+    }
+
+    // Build a projection texture from an RGBA cutout: bleed the person's colours
+    // outward (blurred copies behind the sharp image) so the mesh never samples
+    // transparent/black background → kills the edge speckle/holes.
+    function makeProjTexture(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          const cv = document.createElement("canvas");
+          cv.width = img.width; cv.height = img.height;
+          const ctx = cv.getContext("2d");
+          ctx.filter = "blur(22px)";          // colour bleed into the transparent margin
+          for (let i = 0; i < 7; i++) ctx.drawImage(img, 0, 0, cv.width, cv.height);
+          ctx.filter = "none";
+          ctx.drawImage(img, 0, 0);            // sharp person on top
+          const tex = new THREE.CanvasTexture(cv);
+          tex.colorSpace = THREE.SRGBColorSpace;
+          resolve(tex);
+        };
+        img.onerror = () => reject(new Error("img: " + url));
+        img.src = url;
+      });
+    }
+
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const camPos = new THREE.Vector3();
+    renderer.setAnimationLoop(() => {
+      const dt = clock.getDelta();
+      if (orbit) orbit.update();
+      if (walkState) {
+        camera.quaternion.setFromEuler(new THREE.Euler(walkState.pitch, walkState.yaw, 0, "YXZ"));
+        const speed = 2.5 * dt;
+        const yawE = new THREE.Euler(0, walkState.yaw, 0, "YXZ");
+        const fwd = new THREE.Vector3(0, 0, -1).applyEuler(yawE);
+        const right = new THREE.Vector3(1, 0, 0).applyEuler(yawE);
+        camera.position.addScaledVector(fwd, walkState.move.y * speed).addScaledVector(right, walkState.move.x * speed);
+      }
+      // Yaw-only billboarding: people pivot to face the camera but stay upright.
+      camera.getWorldPosition(camPos);
+      for (const b of billboards) {
+        const dx = camPos.x - b.mesh.position.x;
+        const dz = camPos.z - b.mesh.position.z;
+        b.mesh.rotation.y = Math.atan2(dx, dz);
+      }
+      renderer.render(scene, camera);
+    });
+
+    function showError(e) {
+      console.error(e);
+      errEl.style.display = "grid";
+      errEl.textContent = "Could not load scene: " + (e?.message || e);
+    }
+    addEventListener("error", (ev) => showError(ev.error || ev.message));
+  </script>
+</body>
+</html>

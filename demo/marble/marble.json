@@ -1,0 +1,5 @@
+{
+  "ok": false,
+  "model": "marble-1.0-draft",
+  "error": "Marble generate 402: {\"detail\":\"Insufficient API credits to start world generation with model 'marble-1.0-draft'. Add credits or enable auto-refill at https://platform.worldlabs.ai/billing.\"}"
+}
