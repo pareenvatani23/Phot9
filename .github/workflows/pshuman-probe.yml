@@ -1,0 +1,87 @@
+name: PSHuman quality probe (free, via HF Space)
+
+# Zero-cost quality check: runs PSHuman on the live `fffiloni/PSHuman` Space
+# (HF's own GPU) to judge person reconstruction quality BEFORE building the
+# heavy A100 pipeline. Two-step: introspect the API, then run on a real image.
+#
+# Results (mesh + turntable video) are published to the `ci-pshuman` orphan
+# branch and uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "introspect (print API, no GPU) or run"
+        required: true
+        default: "introspect"
+      image:
+        description: "image path in repo (run mode)"
+        required: false
+        default: "demo/boat.jpg"
+      api_name:
+        description: "exact api_name from introspect (run mode)"
+        required: false
+        default: ""
+      args_json:
+        description: "extra positional args after image, JSON list (run mode)"
+        required: false
+        default: "[]"
+      hf_token:
+        description: "HF token (recommended for ZeroGPU)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      HF_TOKEN: ${{ inputs.hf_token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask token
+        if: inputs.hf_token != ''
+        run: echo "::add-mask::${{ inputs.hf_token }}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install gradio client
+        run: pip install "gradio_client==1.4.3"
+
+      - name: Introspect
+        if: inputs.mode == 'introspect'
+        run: python gpu/probe_pshuman.py --mode introspect
+
+      - name: Run
+        if: inputs.mode == 'run'
+        run: |
+          python gpu/probe_pshuman.py --mode run \
+            --image "${{ inputs.image }}" \
+            --out out \
+            --api-name "${{ inputs.api_name }}" \
+            --args-json '${{ inputs.args_json }}'
+          ls -la out || true
+
+      - name: Upload artifact
+        if: inputs.mode == 'run'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pshuman-probe
+          path: out/
+          if-no-files-found: warn
+
+      - name: Publish to ci-pshuman
+        if: inputs.mode == 'run'
+        run: |
+          test -d out && [ -n "$(ls -A out 2>/dev/null)" ] || { echo "no outputs"; exit 0; }
+          git config user.name "ci"; git config user.email "ci@local"
+          git checkout --orphan ci-pshuman
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f out
+          git commit -q -m "PSHuman probe $(date -u +%FT%TZ)"
+          git push -f origin ci-pshuman
