@@ -50,7 +50,7 @@ jobs:
         run: |
           [ -n "${{ inputs.fal_key }}" ] && echo "::add-mask::${{ inputs.fal_key }}" || true
           [ -n "${{ inputs.worldlabs_key }}" ] && echo "::add-mask::${{ inputs.worldlabs_key }}" || true
-          test -n "$FAL_KEY" || { echo "::error::no FAL_KEY (input or secret)"; exit 1; }
+          # World Labs key is always required; fal only needed when image is a local path.
           test -n "$WORLDLABS_API_KEY" || { echo "::error::no WORLDLABS_API_KEY (input or secret)"; exit 1; }
 
       - uses: actions/setup-node@v4
@@ -62,7 +62,9 @@ jobs:
         run: |
           npm ci
           npm run build
-          node dist/marbleRun.js "../${{ inputs.image }}" ../demo/marble
+          IMG="${{ inputs.image }}"
+          case "$IMG" in http*) ARG="$IMG";; *) ARG="../$IMG";; esac
+          node dist/marbleRun.js "$ARG" ../demo/marble
           echo "--- marble.json ---"
           cat ../demo/marble/marble.json
 

@@ -23,11 +23,20 @@ const outFile = path.join(outDir, "marble.json");
 const model = process.env.MARBLE_MODEL || "marble-1.0-draft";
 
 try {
-  const image = await fs.readFile(imgPath);
-  const isPng = imgPath.toLowerCase().endsWith(".png");
-  console.error("Uploading image to fal storage for a public URL…");
-  const imageUrl = await uploadToFal(image, isPng ? "image/png" : "image/jpeg", `input.${isPng ? "png" : "jpg"}`);
-  console.error("image_url:", imageUrl);
+  // If the image arg is already a public URL, hand it straight to Marble — no
+  // fal upload needed (Marble just needs a fetchable URL). Otherwise upload the
+  // local file to fal storage to obtain one.
+  let imageUrl: string;
+  if (/^https?:\/\//i.test(imgPath)) {
+    imageUrl = imgPath;
+    console.error("Using image URL directly (no fal):", imageUrl);
+  } else {
+    const image = await fs.readFile(imgPath);
+    const isPng = imgPath.toLowerCase().endsWith(".png");
+    console.error("Uploading image to fal storage for a public URL…");
+    imageUrl = await uploadToFal(image, isPng ? "image/png" : "image/jpeg", `input.${isPng ? "png" : "jpg"}`);
+    console.error("image_url:", imageUrl);
+  }
 
   const deadline = Date.now() + 15 * 60 * 1000; // 15 min — world gen can take minutes
   const result = await generateWorldFromImage(imageUrl, { model, deadline, displayName: "diorama" });
