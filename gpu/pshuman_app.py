@@ -68,7 +68,7 @@ image = (
         # Also drop gradio/spaces (the Space's web-UI deps): we run headless via
         # inference.py, and gradio==5.6.0 conflicts with the pinned huggingface-hub.
         "cd /root/PSHuman && "
-        "grep -ivE 'pytorch3d|nvdiffrast|torch_scatter|gradio|spaces' requirements.txt > req_rest.txt && "
+        "grep -ivE 'pytorch3d|nvdiffrast|torch_scatter|gradio|spaces|nvidia-pyindex' requirements.txt > req_rest.txt && "
         "grep -iE  'pytorch3d|nvdiffrast|torch_scatter' requirements.txt > req_src.txt && "
         "pip install -r req_rest.txt && "
         "pip install --no-build-isolation -r req_src.txt",
