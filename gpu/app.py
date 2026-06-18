@@ -36,7 +36,7 @@ app = modal.App("phot9-gpu")
 # test stays cheap to iterate on.
 smoke_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("torch==2.4.0", "requests==2.32.3")
+    .pip_install("torch==2.4.0", "numpy==1.26.4", "requests==2.32.3")
 )
 
 
@@ -46,11 +46,16 @@ def smoke() -> dict:
     import torch
     import requests
 
+    # Keep every value a plain JSON type: torch.__version__ is a torch-specific
+    # str subclass, so returning it would force the caller to import torch to
+    # deserialize. str()/int()/list() strip those types off the return payload.
     info: dict = {
-        "torch": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
-        "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "capability": torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None,
+        "torch": str(torch.__version__),
+        "cuda_available": bool(torch.cuda.is_available()),
+        "device": str(torch.cuda.get_device_name(0)) if torch.cuda.is_available() else None,
+        "capability": [int(x) for x in torch.cuda.get_device_capability(0)]
+        if torch.cuda.is_available()
+        else None,
     }
 
     # A trivial GPU op so we know the device actually executes, not just enumerates.
