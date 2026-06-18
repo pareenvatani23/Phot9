@@ -78,6 +78,13 @@ image = (
     # transformers 4.51 requires huggingface-hub <1.0; an unpinned install pulled
     # 1.20. Pin it last so the final env is compatible (cheap appended layer).
     .pip_install("huggingface_hub==0.34.0")
+    # basicsr imports torchvision.transforms.functional_tensor, removed in tv>=0.17.
+    # Re-create it as a shim re-exporting from functional (the classic basicsr fix).
+    .run_commands(
+        "TVDIR=$(python -c 'import torchvision, os; print(os.path.dirname(torchvision.__file__))') && "
+        "echo 'from torchvision.transforms.functional import rgb_to_grayscale' > \"$TVDIR/transforms/functional_tensor.py\" && "
+        "echo SHIM_OK"
+    )
 )
 
 
