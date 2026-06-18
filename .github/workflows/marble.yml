@@ -22,6 +22,14 @@ on:
         description: "Marble model (marble-1.1 full | marble-1.0-draft cheap)"
         required: false
         default: "marble-1.1"
+      fal_key:
+        description: "fal API key (optional; else repo secret FAL_KEY)"
+        required: false
+        default: ""
+      worldlabs_key:
+        description: "World Labs API key (optional; else secret WORLDLABS_API_KEY)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -32,16 +40,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      FAL_KEY: ${{ secrets.FAL_KEY }}
-      WORLDLABS_API_KEY: ${{ secrets.WORLDLABS_API_KEY }}
+      FAL_KEY: ${{ inputs.fal_key != '' && inputs.fal_key || secrets.FAL_KEY }}
+      WORLDLABS_API_KEY: ${{ inputs.worldlabs_key != '' && inputs.worldlabs_key || secrets.WORLDLABS_API_KEY }}
       MARBLE_MODEL: ${{ inputs.model }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check secrets present
+      - name: Mask + check keys
         run: |
-          test -n "$FAL_KEY" || { echo "::error::FAL_KEY secret not set"; exit 1; }
-          test -n "$WORLDLABS_API_KEY" || { echo "::error::WORLDLABS_API_KEY secret not set"; exit 1; }
+          [ -n "${{ inputs.fal_key }}" ] && echo "::add-mask::${{ inputs.fal_key }}" || true
+          [ -n "${{ inputs.worldlabs_key }}" ] && echo "::add-mask::${{ inputs.worldlabs_key }}" || true
+          test -n "$FAL_KEY" || { echo "::error::no FAL_KEY (input or secret)"; exit 1; }
+          test -n "$WORLDLABS_API_KEY" || { echo "::error::no WORLDLABS_API_KEY (input or secret)"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
