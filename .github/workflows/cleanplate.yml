@@ -1,0 +1,57 @@
+name: Clean plate (remove person + inpaint)
+
+# Removes the person(s) from a photo and inpaints the hole (rembg + LaMa) so the
+# world generator gets a person-free background. CPU only — no GPU/Modal.
+# Publishes out/clean.png to the ci-clean branch (raw URL for Marble) + artifact.
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/cleanplate.yml", "gpu/cleanplate.py" ]
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "image path in repo"
+        required: false
+        default: "demo/hiker.jpg"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanplate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps (CPU)
+        run: |
+          pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install "numpy==1.26.4" "rembg==2.0.59" onnxruntime==1.20.0 \
+            simple-lama-inpainting opencv-python-headless pillow
+
+      - name: Generate clean plate
+        run: |
+          python gpu/cleanplate.py --image "${{ inputs.image }}" --out out/clean.png
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-plate
+          path: out/clean.png
+          if-no-files-found: warn
+
+      - name: Publish to ci-clean
+        run: |
+          test -f out/clean.png || { echo "no clean plate"; exit 1; }
+          git config user.name "ci"; git config user.email "ci@local"
+          git checkout --orphan ci-clean
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f out/clean.png
+          git commit -q -m "clean plate $(date -u +%FT%TZ)"
+          git push -f origin ci-clean
