@@ -85,6 +85,12 @@ image = (
         "echo 'from torchvision.transforms.functional import rgb_to_grayscale' > \"$TVDIR/transforms/functional_tensor.py\" && "
         "echo SHIM_OK"
     )
+    # Small utility deps the conda env pulls that aren't in the core wheels above.
+    .pip_install(
+        "easydict", "scipy", "scikit-image", "imageio", "imageio-ffmpeg",
+        "matplotlib", "plyfile", "py360convert", "sentencepiece",
+        "open_clip_torch", "ftfy", "rembg", "pymeshlab",
+    )
 )
 
 
