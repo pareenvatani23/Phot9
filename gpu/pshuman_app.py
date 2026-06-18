@@ -152,6 +152,14 @@ def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
             ["python", "utils/remove_bg.py", "--path", "examples"],
             cwd=workdir, check=True,
         )
+        # remove_bg.py writes <name>_rmbg.png (RGBA) but leaves the RGB original;
+        # the dataset globs *.png and crashes reading alpha off the RGB original.
+        # Keep only the RGBA *_rmbg.png outputs.
+        for f in os.listdir(examples):
+            if not f.endswith("_rmbg.png"):
+                os.remove(os.path.join(examples, f))
+        print("INPUTS_AFTER_RMBG", os.listdir(examples))
+
         # Stage 2: cross-scale multiview diffusion + explicit remeshing.
         subprocess.run(
             [
