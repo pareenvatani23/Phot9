@@ -46,12 +46,15 @@ image = (
     )
     # kaolin from NVIDIA's wheel index for exactly torch-2.1.0_cu121.
     .run_commands(f"pip install kaolin==0.17.0 -f {KAOLIN_FIND_LINKS}")
+    # Compile the CUDA ops for our target archs (A100=8.0, L40S=8.9) WITHOUT a
+    # live GPU, so the slow nvdiffrast/pytorch3d build runs on cheap CPU builders
+    # instead of a billed A100. FORCE_CUDA makes them build even with no device.
+    .env({"TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9", "FORCE_CUDA": "1"})
     # Clone the repo, then install its requirements (this is the slow part:
     # nvdiffrast + pytorch3d compile from the git pins inside requirements.txt).
     .run_commands(
         f"git clone {REPO} /root/PSHuman",
         "cd /root/PSHuman && pip install -r requirements.txt",
-        gpu="A100",  # some ops probe CUDA at build time; give the builder a GPU
     )
     # Non-gated SMPL-X / ECON assets mirror (avoids the smpl-x.is.tue.mpg.de gate).
     # Lands under /root/PSHuman/data to match the expected data/ layout.
@@ -66,7 +69,7 @@ image = (
 @app.function(
     image=image,
     gpu="A100-80GB",
-    timeout=3600,
+    timeout=1500,  # 25 min cap: PSHuman inference is a few min; bounds A100 cost
     volumes={"/root/.cache/huggingface": hf_cache},
 )
 def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
