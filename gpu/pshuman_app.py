@@ -113,6 +113,22 @@ def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
     os.environ["HF_HUB_CACHE"] = "/cache/hub"
 
     workdir = "/root/PSHuman"
+    # Ensure diffusers can import PSHuman's custom unet/pipeline by dotted path
+    # (model_index.json points the UNet at mvdiffusion.models_unclip...).
+    os.environ["PYTHONPATH"] = workdir + ":" + os.environ.get("PYTHONPATH", "")
+
+    # Diagnostic (cheap, non-fatal): print library versions and surface the REAL
+    # import error for the custom unet — diffusers otherwise masks it as a
+    # generic "module does not exist" ValueError.
+    subprocess.run(
+        ["python", "-c",
+         "import diffusers, huggingface_hub as h; "
+         "print('VERS diffusers', diffusers.__version__, 'hub', h.__version__); "
+         "import mvdiffusion.models_unclip.unet_mv2d_condition as m; "
+         "print('UNET_IMPORT_OK', m.__file__)"],
+        cwd=workdir, check=False,
+    )
+
     examples = os.path.join(workdir, "examples")
     os.makedirs(examples, exist_ok=True)
     # Start clean so we only collect this run's outputs.
@@ -122,28 +138,31 @@ def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
     with open(os.path.join(examples, fname), "wb") as f:
         f.write(image_bytes)
 
-    # Stage 1: background removal -> white-bg RGBA the model expects.
-    subprocess.run(
-        ["python", "utils/remove_bg.py", "--path", "examples"],
-        cwd=workdir, check=True,
-    )
-
-    # Stage 2: cross-scale multiview diffusion + explicit remeshing.
-    subprocess.run(
-        [
-            "python", "inference.py",
-            "--config", "configs/inference-768-6view.yaml",
-            "pretrained_model_name_or_path=pengHTYX/PSHuman_Unclip_768_6views",
-            f"validation_dataset.crop_size={crop_size}",
-            "with_smpl=false",
-            "validation_dataset.root_dir=examples",
-            f"seed={seed}",
-            "num_views=7",
-            "save_mode=rgb",
-        ],
-        cwd=workdir, check=True,
-    )
-    hf_cache.commit()
+    try:
+        # Stage 1: background removal -> white-bg RGBA the model expects.
+        subprocess.run(
+            ["python", "utils/remove_bg.py", "--path", "examples"],
+            cwd=workdir, check=True,
+        )
+        # Stage 2: cross-scale multiview diffusion + explicit remeshing.
+        subprocess.run(
+            [
+                "python", "inference.py",
+                "--config", "configs/inference-768-6view.yaml",
+                "pretrained_model_name_or_path=pengHTYX/PSHuman_Unclip_768_6views",
+                f"validation_dataset.crop_size={crop_size}",
+                "with_smpl=false",
+                "validation_dataset.root_dir=examples",
+                f"seed={seed}",
+                "num_views=7",
+                "save_mode=rgb",
+            ],
+            cwd=workdir, check=True,
+        )
+    finally:
+        # Persist any downloaded weights to the volume even on failure, so
+        # reruns don't re-download the multi-GB checkpoints.
+        hf_cache.commit()
 
     objs = sorted(glob.glob(os.path.join(workdir, "out", "**", "*.obj"), recursive=True))
     print(f"PSHUMAN_OUTPUTS: {objs}")
