@@ -87,7 +87,9 @@ image = (
         "huggingface-cli download fffiloni/PSHuman-SMPL-related "
         "--repo-type model --local-dir /root/PSHuman/data"
     )
-    .env({"PYOPENGL_PLATFORM": "egl", "HF_HOME": "/root/.cache/huggingface"})
+    # Don't pin HF_HOME here: the build populates the default cache, and we mount
+    # the runtime weights volume at a separate clean path (see the function).
+    .env({"PYOPENGL_PLATFORM": "egl"})
 )
 
 
@@ -95,7 +97,7 @@ image = (
     image=image,
     gpu="A100-80GB",
     timeout=1500,  # 25 min cap: PSHuman inference is a few min; bounds A100 cost
-    volumes={"/root/.cache/huggingface": hf_cache},
+    volumes={"/cache": hf_cache},  # clean mount path (image's default cache is non-empty)
 )
 def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
                   crop_size: int = 740, seed: int = 600) -> dict:
@@ -104,6 +106,11 @@ def pshuman_infer(image_bytes: bytes, fname: str = "input.png",
     import glob
     import os
     import subprocess
+
+    # Route runtime HF downloads (PSHuman ckpt, SD2.1-unclip) into the mounted
+    # volume so they're cached across runs. Subprocesses inherit this env.
+    os.environ["HF_HOME"] = "/cache"
+    os.environ["HF_HUB_CACHE"] = "/cache/hub"
 
     workdir = "/root/PSHuman"
     examples = os.path.join(workdir, "examples")
