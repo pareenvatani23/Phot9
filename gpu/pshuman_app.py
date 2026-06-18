@@ -49,7 +49,15 @@ image = (
     # Compile the CUDA ops for our target archs (A100=8.0, L40S=8.9) WITHOUT a
     # live GPU, so the slow nvdiffrast/pytorch3d build runs on cheap CPU builders
     # instead of a billed A100. FORCE_CUDA makes them build even with no device.
-    .env({"TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9", "FORCE_CUDA": "1"})
+    # CC/CXX=gcc/g++: Modal's add_python standalone interpreter reports its
+    # compiler as clang++ (it was clang-built), so torch's build probes
+    # `which clang++` and fails; force g++ (present via build-essential).
+    .env({
+        "TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9",
+        "FORCE_CUDA": "1",
+        "CC": "gcc",
+        "CXX": "g++",
+    })
     # Clone the repo, then install its requirements (this is the slow part:
     # nvdiffrast + pytorch3d compile from the git pins inside requirements.txt).
     # --no-build-isolation so the source builds (pytorch3d/nvdiffrast/torch_scatter)
