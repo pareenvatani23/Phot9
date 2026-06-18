@@ -1,0 +1,49 @@
+name: GPU pipeline (Phase 1 smoke)
+
+# Phase 1 of the full-volumetric GPU path: prove we can get a Modal GPU, that
+# CUDA is live, and that the container has outbound network — before any model
+# work. Mirrors marble.yml: dispatch with the token, keys are masked.
+#
+# Provision first: create a Modal account, `modal token new`, and pass the
+# token id/secret below (or store them as repo secrets).
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/gpu.yml", "gpu/**" ]
+  workflow_dispatch:
+    inputs:
+      modal_token_id:
+        description: "Modal token id (ak-...)"
+        required: true
+      modal_token_secret:
+        description: "Modal token secret (as-...)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MODAL_TOKEN_ID: ${{ inputs.modal_token_id }}
+      MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask token
+        run: |
+          echo "::add-mask::${{ inputs.modal_token_id }}"
+          echo "::add-mask::${{ inputs.modal_token_secret }}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Modal client
+        run: pip install -r gpu/requirements.txt
+
+      - name: Run GPU smoke test
+        run: modal run gpu/app.py::smoke
