@@ -92,11 +92,10 @@ def generate(image_bytes: bytes, hf_token: str,
 
     # Gated HunyuanWorld weights -> cached volume, symlinked where the repo expects.
     ckpt = "/weights/HunyuanWorld-1"
-    if not os.path.exists(os.path.join(ckpt, "config.json")) and not glob.glob(ckpt + "/*"):
-        subprocess.run(
-            ["huggingface-cli", "download", "tencent/HunyuanWorld-1", "--local-dir", ckpt],
-            check=True,
-        )
+    if not glob.glob(ckpt + "/*"):
+        from huggingface_hub import snapshot_download
+        # Raises a clear GatedRepoError if the HF license hasn't been accepted.
+        snapshot_download("tencent/HunyuanWorld-1", local_dir=ckpt, token=hf_token or None)
         weights.commit()
     link = os.path.join(WORKDIR, "HunyuanWorld-1")
     if not os.path.islink(link):
