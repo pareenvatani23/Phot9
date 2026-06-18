@@ -21,7 +21,7 @@ execution happens on Modal's GPUs, billed per-second with scale-to-zero.
 
 | Phase | Function          | Status | What it proves / does |
 |-------|-------------------|--------|-----------------------|
-| 1     | `smoke`           | ready  | GPU present, CUDA live, egress works |
+| 1     | `smoke`           | ✅ green | GPU (L40S), CUDA + matmul, egress HF/WorldLabs 200 |
 | 2     | `human_pass`      | stub   | photo → person as Gaussians (HumanSplat → SAM-3D-Body → PSHuman) |
 | 3     | `solve_placement` | stub   | depth + Marble camera → human transform |
 | 4     | `composite`       | stub   | merge + contact-refine → `.spz` for Spark |
