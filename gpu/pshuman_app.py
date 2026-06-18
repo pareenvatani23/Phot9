@@ -61,7 +61,15 @@ image = (
         # `from pkg_resources import packaging`, which modern setuptools (>=81)
         # removed. 69.x still ships it.
         "pip install -U pip && pip install 'setuptools==69.5.1' wheel ninja",
-        "cd /root/PSHuman && pip install --no-build-isolation -r requirements.txt",
+        # Split the install: the torch-dependent source builds
+        # (pytorch3d/nvdiffrast/torch_scatter) need --no-build-isolation so they
+        # see torch; everything else installs normally so packages with their own
+        # build backend (e.g. nvidia_stub) still get an isolated build env.
+        "cd /root/PSHuman && "
+        "grep -ivE 'pytorch3d|nvdiffrast|torch_scatter' requirements.txt > req_rest.txt && "
+        "grep -iE  'pytorch3d|nvdiffrast|torch_scatter' requirements.txt > req_src.txt && "
+        "pip install -r req_rest.txt && "
+        "pip install --no-build-isolation -r req_src.txt",
     )
     # Non-gated SMPL-X / ECON assets mirror (avoids the smpl-x.is.tue.mpg.de gate).
     # Lands under /root/PSHuman/data to match the expected data/ layout.
