@@ -52,9 +52,13 @@ image = (
     .env({"TORCH_CUDA_ARCH_LIST": "8.0;8.6;8.9", "FORCE_CUDA": "1"})
     # Clone the repo, then install its requirements (this is the slow part:
     # nvdiffrast + pytorch3d compile from the git pins inside requirements.txt).
+    # --no-build-isolation so the source builds (pytorch3d/nvdiffrast/torch_scatter)
+    # see the torch we already installed instead of a fresh isolated env that
+    # has no torch (the "No module named 'torch'" build failure).
     .run_commands(
         f"git clone {REPO} /root/PSHuman",
-        "cd /root/PSHuman && pip install -r requirements.txt",
+        "pip install -U pip setuptools wheel ninja",
+        "cd /root/PSHuman && pip install --no-build-isolation -r requirements.txt",
     )
     # Non-gated SMPL-X / ECON assets mirror (avoids the smpl-x.is.tue.mpg.de gate).
     # Lands under /root/PSHuman/data to match the expected data/ layout.
