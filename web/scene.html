@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Phot9 — person in world</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0c;overflow:hidden;font:13px -apple-system,system-ui,sans-serif;color:#eee}
+  #c{display:block;width:100vw;height:100vh}
+  #hud{position:fixed;top:10px;left:0;right:0;text-align:center;color:#fff;text-shadow:0 1px 3px #000;pointer-events:none}
+  #panel{position:fixed;right:10px;bottom:10px;width:230px;background:rgba(0,0,0,.55);
+    border-radius:10px;padding:10px 12px;backdrop-filter:blur(6px);z-index:6}
+  #panel label{display:flex;justify-content:space-between;gap:8px;margin:5px 0 1px;opacity:.85}
+  #panel input[type=range]{width:100%}
+  #panel button{width:100%;margin-top:8px;padding:6px;border:0;border-radius:6px;background:#3b6fe0;color:#fff;font-weight:600;cursor:pointer}
+  #err{position:fixed;inset:0;display:none;place-items:center;padding:24px;color:#ffb4b4;text-align:center}
+  #bake{margin-top:6px;font-size:11px;word-break:break-all;opacity:.8;max-height:64px;overflow:auto}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<div id="err"></div>
+<div id="panel">
+  <label>scale <span id="vS"></span></label><input id="S" type="range" min="-2" max="1.4" step="0.01">
+  <label>x <span id="vX"></span></label><input id="X" type="range" min="-8" max="8" step="0.02">
+  <label>height (y) <span id="vY"></span></label><input id="Y" type="range" min="-8" max="8" step="0.02">
+  <label>depth (z) <span id="vZ"></span></label><input id="Z" type="range" min="-8" max="8" step="0.02">
+  <label>yaw <span id="vR"></span></label><input id="R" type="range" min="-3.15" max="3.15" step="0.01">
+  <button id="copy">copy placement URL</button>
+  <div id="bake"></div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+  "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+}}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+
+const P = new URLSearchParams(location.search);
+const hud = document.getElementById("hud"), errEl = document.getElementById("err");
+// Defaults: boat lagoon world + the PSHuman boat-woman mesh (override via ?world= / ?model=).
+const WORLD = P.get("world") || "https://cdn.marble.worldlabs.ai/8a020797-4144-48c4-b8cb-b1d7924ce348/35b406c7-890c-4ec0-9c7e-acd1855769a7_ceramic_500k.spz";
+const MODEL = P.get("model") || "https://raw.githubusercontent.com/pareenvatani23/Phot9/ci-pshuman/out/result_clr_scale4_boat_woman_rmbg.obj";
+const num = (k, d) => (P.has(k) ? parseFloat(P.get(k)) : d);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("c"), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(num("fov", 50), innerWidth/innerHeight, 0.01, 1000);
+camera.position.set(0, 0, num("cam", 3));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.3); sun.position.set(0.5,1,1.2); scene.add(sun);
+const spark = new SparkRenderer({ renderer }); scene.add(spark);
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true; orbit.dampingFactor = 0.08;
+addEventListener("resize", () => { camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); });
+function showError(e){ errEl.style.display="grid"; errEl.textContent=String(e&&e.message||e); console.error(e); }
+
+// ── Marble world ──────────────────────────────────────────────────────────
+const world = new SplatMesh({ url: WORLD });
+scene.add(world);
+world.quaternion.setFromAxisAngle(new THREE.Vector3(1,0,0), Math.PI);  // Spark Y-down → up
+
+// ── Person (PSHuman vertex-colored OBJ), normalized to 1 unit tall, feet at y=0
+const person = new THREE.Group(); scene.add(person);
+const t = { s: num("s", 1.7), x: num("x", 0), y: num("y", 0), z: num("z", 0), r: num("r", 0) };
+new OBJLoader().load(MODEL, (obj) => {
+  obj.traverse((c) => { if (c.isMesh) {
+    const hasCol = !!c.geometry.getAttribute("color");
+    c.material = new THREE.MeshStandardMaterial({ vertexColors: hasCol, color: hasCol?0xffffff:0xb9bcc4, roughness:.9, side: THREE.DoubleSide });
+  }});
+  const box = new THREE.Box3().setFromObject(obj), size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  obj.position.set(-ctr.x, -box.min.y, -ctr.z);     // center x/z, feet to y=0
+  const inner = new THREE.Group(); inner.add(obj);
+  inner.scale.setScalar(1 / (size.y || 1));         // now ~1 unit tall
+  person.add(inner);
+  apply(); hud.textContent = "drag = orbit · use sliders to place the person";
+}, undefined, (e)=>showError(new Error("mesh load failed (still generating?) — "+MODEL)));
+
+function apply(){
+  person.position.set(t.x, t.y, t.z);
+  person.scale.setScalar(t.s);
+  person.rotation.y = t.r;
+  for (const [k,el,v] of [["s","S","vS"],["x","X","vX"],["y","Y","vY"],["z","Z","vZ"],["r","R","vR"]]){
+    document.getElementById(v).textContent = (+t[k]).toFixed(2);
+  }
+  document.getElementById("bake").textContent =
+    `?world=${encodeURIComponent(WORLD)}&model=${encodeURIComponent(MODEL)}&s=${t.s}&x=${t.x}&y=${t.y}&z=${t.z}&r=${t.r}`;
+}
+// slider wiring (scale slider is exponential for fine control)
+const Sg=document.getElementById("S"); Sg.value=Math.log10(t.s);
+Sg.oninput=()=>{ t.s=+Math.pow(10, +Sg.value).toFixed(3); apply(); };
+for (const [k,id] of [["x","X"],["y","Y"],["z","Z"],["r","R"]]){
+  const el=document.getElementById(id); el.value=t[k];
+  el.oninput=()=>{ t[k]=+el.value; apply(); };
+}
+document.getElementById("copy").onclick=()=>{
+  const u=location.origin+location.pathname+document.getElementById("bake").textContent;
+  navigator.clipboard?.writeText(u); document.getElementById("copy").textContent="copied!";
+  setTimeout(()=>document.getElementById("copy").textContent="copy placement URL",1200);
+};
+
+(function loop(){ requestAnimationFrame(loop); orbit.update(); renderer.render(scene, camera); })();
+</script>
+</body>
+</html>
