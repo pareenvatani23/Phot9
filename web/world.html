@@ -22,14 +22,28 @@
     background: #2b6cf0; color: #fff; cursor: pointer; font-size: 14px; }
   #drop.hidden { display: none; }
   kbd { background:#222630; border:1px solid #3a4150; border-radius:4px; padding:1px 5px; font-size:12px; }
+  canvas { display: block; touch-action: none; }
+  /* On-screen move pad (touch + mouse). */
+  #stick { position: fixed; left: 18px; bottom: 18px; width: 104px; height: 104px;
+    border-radius: 50%; background: rgba(255,255,255,.05); border: 1px solid #3a4150;
+    touch-action: none; z-index: 4; }
+  #stick.hidden { display: none; }
+  #knob { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px;
+    margin: -23px 0 0 -23px; border-radius: 50%; background: rgba(125,180,255,.45);
+    border: 1px solid #7db4ff; }
+  #hud .touch { display: none; }
+  body.is-touch #hud .touch { display: inline; }
+  body.is-touch #hud .desk { display: none; }
 </style>
 </head>
 <body>
 <div id="hud">
   Phot9 world explorer<br>
-  <kbd>drag</kbd> look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>shift</kbd> faster · <kbd>scroll</kbd> speed
+  <span class="desk"><kbd>drag</kbd> look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>shift</kbd> faster · <kbd>scroll</kbd> speed</span>
+  <span class="touch">drag to look · joystick to move · pinch to go forward</span>
 </div>
 <div id="status"></div>
+<div id="stick" class="hidden"><div id="knob"></div></div>
 
 <div id="drop">
   <div class="card">
@@ -136,22 +150,66 @@ loader.load(modelUrl,
     statusEl.textContent = "no published world yet — drop your .ply files";
   });
 
-// --- First-person explore: drag to look, WASD to move ---
-let yaw = 0, pitch = 0, dragging = false, px = 0, py = 0;
-const keys = {};
+// --- First-person explore (desktop: drag+WASD+wheel; touch: drag+joystick+pinch) ---
+let yaw = 0, pitch = 0, pinch = 0;
+const keys = {}, move = { x: 0, y: 0 };
 let speed = 0.04;  // fraction of world radius per frame
 
-renderer.domElement.addEventListener("pointerdown", e => { dragging = true; px = e.clientX; py = e.clientY; });
-addEventListener("pointerup", () => { dragging = false; });
+// Look / pinch via unified Pointer Events on the canvas. One active pointer rotates
+// the view; two pointers pinch to dolly forward/back. (The joystick captures its own
+// pointer separately, so its touches never reach here.)
+const pointers = new Map();
+const cvs = renderer.domElement;
+cvs.addEventListener("pointerdown", e => pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }));
 addEventListener("pointermove", e => {
-  if (!dragging) return;
-  yaw -= (e.clientX - px) * 0.0035; pitch -= (e.clientY - py) * 0.0035;
-  pitch = Math.max(-1.5, Math.min(1.5, pitch));
-  px = e.clientX; py = e.clientY;
+  if (!pointers.has(e.pointerId)) return;
+  if (pointers.size >= 2) {
+    const a = [...pointers.values()];
+    const old = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const b = [...pointers.values()];
+    const now = Math.hypot(b[0].x - b[1].x, b[0].y - b[1].y);
+    pinch += (now - old);                       // pinch out -> move forward
+  } else {
+    const p = pointers.get(e.pointerId);
+    yaw -= (e.clientX - p.x) * 0.0035;
+    pitch -= (e.clientY - p.y) * 0.0035;
+    pitch = Math.max(-1.5, Math.min(1.5, pitch));
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
 });
+const dropPointer = e => pointers.delete(e.pointerId);
+addEventListener("pointerup", dropPointer);
+addEventListener("pointercancel", dropPointer);
+
+// On-screen joystick (shown on touch devices; also works with a mouse).
+const stick = document.getElementById("stick"), knob = document.getElementById("knob");
+const STICK_R = 40;
+let stickId = null;
+const setKnob = (dx, dy) => { knob.style.transform = `translate(${dx}px,${dy}px)`; };
+stick.addEventListener("pointerdown", e => {
+  e.preventDefault(); stickId = e.pointerId; stick.setPointerCapture(e.pointerId);
+});
+stick.addEventListener("pointermove", e => {
+  if (e.pointerId !== stickId) return;
+  const r = stick.getBoundingClientRect();
+  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const len = Math.hypot(dx, dy) || 1, cl = Math.min(len, STICK_R);
+  dx = dx / len * cl; dy = dy / len * cl;
+  setKnob(dx, dy); move.x = dx / STICK_R; move.y = dy / STICK_R;
+});
+const stickEnd = e => { if (e.pointerId === stickId) { stickId = null; move.x = move.y = 0; setKnob(0, 0); } };
+stick.addEventListener("pointerup", stickEnd);
+stick.addEventListener("pointercancel", stickEnd);
+
+if (matchMedia("(pointer: coarse)").matches || "ontouchstart" in window) {
+  document.body.classList.add("is-touch");
+  stick.classList.remove("hidden");
+}
+
 addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
 addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
-renderer.domElement.addEventListener("wheel", e => {
+cvs.addEventListener("wheel", e => {
   e.preventDefault(); speed *= e.deltaY > 0 ? 0.9 : 1.1;
   speed = Math.max(0.002, Math.min(0.3, speed));
 }, { passive: false });
@@ -168,6 +226,11 @@ const fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vec
   if (keys["a"]) camera.position.addScaledVector(right, -step);
   if (keys["e"]) camera.position.y += step;
   if (keys["q"]) camera.position.y -= step;
+  if (move.x || move.y) {                        // joystick: up = forward
+    camera.position.addScaledVector(fwd, -move.y * step);
+    camera.position.addScaledVector(right, move.x * step);
+  }
+  if (pinch) { camera.position.addScaledVector(fwd, pinch * worldRadius * 0.0015); pinch = 0; }
   camera.lookAt(camera.position.clone().add(fwd));
   renderer.render(scene, camera);
 })();
