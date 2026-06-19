@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>WorldPlay clip</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#0b0b0d;color:#ddd;
+    font:14px/1.4 system-ui,sans-serif;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px}
+  video{max-width:96vw;max-height:86vh;border-radius:8px;
+    box-shadow:0 8px 40px rgba(0,0,0,.6);background:#000}
+  a{color:#7aa2ff}
+</style>
+<!-- Plays out/worldplay.mp4 by default; override with ?video=<path>. -->
+<video id="v" controls autoplay loop muted playsinline></video>
+<div><a id="dl" download>download clip</a></div>
+<script>
+  const src = new URLSearchParams(location.search).get('video') || 'out/worldplay.mp4';
+  const v = document.getElementById('v');
+  v.src = src; document.getElementById('dl').href = src;
+</script>
