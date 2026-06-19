@@ -93,9 +93,12 @@ image = (
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
     # HunyuanWorld/MoGe need utils3d at this exact commit (has utils3d.numpy.image_uv);
-    # a transitive install pulled an incompatible version. Pin it last.
-    .pip_install(
-        "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183"
+    # a transitive install pulled an incompatible version. Force-reinstall the pin
+    # (plain pip install skipped it as "already satisfied") and verify at build time.
+    .run_commands(
+        "pip install --force-reinstall --no-deps "
+        "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183 && "
+        "python -c 'import utils3d; print(\"IMAGE_UV_OK\", utils3d.numpy.image_uv)'"
     )
 )
 
