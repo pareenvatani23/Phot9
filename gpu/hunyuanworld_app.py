@@ -92,15 +92,13 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
-    # HunyuanWorld calls utils3d.numpy.image_uv. Force-reinstall MoGe's pin (with deps)
-    # and print what utils3d.numpy actually exposes so we can confirm the attribute.
+    # HunyuanWorld calls utils3d.numpy.image_uv — the pre-rewrite flat API. MoGe's pin
+    # (utils3d 1.3) removed it and pulls numpy 2.x. Install the older flat-API commit
+    # with --no-deps (protects numpy 1.24) and verify image_uv exists at build time.
     .run_commands(
-        "pip install --force-reinstall "
-        "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183 && "
-        "python -c 'import utils3d, utils3d.numpy as n; "
-        "print(\"UVATTRS\", sorted([x for x in dir(n) if \"uv\" in x.lower()])); "
-        "print(\"NDIR\", sorted(dir(n))); "
-        "assert hasattr(n, \"image_uv\"), \"NO_IMAGE_UV\"'"
+        "pip install --force-reinstall --no-deps "
+        "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8 && "
+        "python -c 'import utils3d; print(\"IMAGE_UV_OK\", utils3d.numpy.image_uv)'"
     )
 )
 
