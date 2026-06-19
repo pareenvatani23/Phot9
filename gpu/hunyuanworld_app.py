@@ -92,18 +92,14 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
-    # HunyuanWorld uses the pre-rewrite flat utils3d API (utils3d.numpy.image_uv and
-    # the utils3d.np alias with create_icosahedron_mesh). MoGe's transitive pin (1.3)
-    # removed all of it and pulls numpy 2.x. Install the flat-API commit (--no-deps to
-    # protect numpy 1.24), add the np alias it lacks, and verify both funcs at build.
+    # utils3d on Python 3.10: the Aug-2025 commit has the flat utils3d.numpy.image_uv
+    # and imports cleanly on 3.10; later commits added create_icosahedron_mesh but use
+    # 3.11-only syntax and dropped image_uv. We install this commit and shim the
+    # missing np alias + create_icosahedron_mesh at runtime (see generate()).
+    # --no-deps protects the pinned numpy 1.24.
     .run_commands(
         "pip install --force-reinstall --no-deps "
-        "git+https://github.com/EasternJournalist/utils3d.git@404fbee && "
-        "python -c \"import utils3d, os; "
-        "open(os.path.join(os.path.dirname(utils3d.__file__), '__init__.py'), 'a').write('\\nfrom utils3d import numpy as np\\n')\" && "
-        "python -c \"import utils3d; "
-        "print('IMG', hasattr(utils3d.numpy, 'image_uv'), 'ICO', hasattr(utils3d.numpy, 'create_icosahedron_mesh')); "
-        "print('NPALIAS_OK', utils3d.np.create_icosahedron_mesh)\""
+        "git+https://github.com/EasternJournalist/utils3d.git@d3a577acf0a9ad7e513a1416449a07b6f47d967f"
     )
 )
 
@@ -135,6 +131,33 @@ def generate(image_bytes: bytes, hf_token: str,
     zim_link = os.path.join(WORKDIR, "ZIM", "zim_vit_l_2092")
     if not os.path.exists(zim_link):
         subprocess.run(["ln", "-sfn", os.path.join(WORKDIR, "zim_vit_l_2092"), zim_link], check=True)
+
+    # Patch the installed utils3d so the demo subprocesses see the np alias and the
+    # create_icosahedron_mesh function (copied verbatim from utils3d) that this older,
+    # py3.10-compatible commit predates. image_uv is already native here.
+    import textwrap
+    import utils3d
+    u3d = os.path.dirname(utils3d.__file__)
+    top_init = os.path.join(u3d, "__init__.py")
+    if "import numpy as np" not in open(top_init).read():
+        open(top_init, "a").write("\nfrom utils3d import numpy as np\n")
+    np_init = os.path.join(u3d, "numpy", "__init__.py")
+    if "def create_icosahedron_mesh" not in open(np_init).read():
+        open(np_init, "a").write(textwrap.dedent('''
+            import numpy as _np
+            def create_icosahedron_mesh():
+                A = (1 + 5 ** 0.5) / 2
+                vertices = _np.array([
+                    [0, 1, A], [0, -1, A], [0, 1, -A], [0, -1, -A],
+                    [1, A, 0], [-1, A, 0], [1, -A, 0], [-1, -A, 0],
+                    [A, 0, 1], [A, 0, -1], [-A, 0, 1], [-A, 0, -1]], dtype=_np.float32)
+                faces = _np.array([
+                    [0, 1, 8], [0, 8, 4], [0, 4, 5], [0, 5, 10], [0, 10, 1],
+                    [3, 2, 9], [3, 9, 6], [3, 6, 7], [3, 7, 11], [3, 11, 2],
+                    [1, 6, 8], [8, 9, 4], [4, 2, 5], [5, 11, 10], [10, 7, 1],
+                    [2, 4, 9], [9, 8, 6], [6, 1, 7], [7, 10, 11], [11, 5, 2]], dtype=_np.int32)
+                return vertices, faces
+        '''))
 
     os.makedirs(os.path.join(WORKDIR, "examples", "in"), exist_ok=True)
     inp = os.path.join(WORKDIR, "examples", "in", "input.png")
