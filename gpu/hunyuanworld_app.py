@@ -117,6 +117,11 @@ def generate(image_bytes: bytes, hf_token: str,
     link = os.path.join(WORKDIR, "HunyuanWorld-1")
     if not os.path.islink(link):
         subprocess.run(["ln", "-sfn", ckpt, link], check=True)
+    # scenegen looks for ZIM weights at ./ZIM/zim_vit_l_2092; they're baked at the
+    # repo root — symlink them into place.
+    zim_link = os.path.join(WORKDIR, "ZIM", "zim_vit_l_2092")
+    if not os.path.exists(zim_link):
+        subprocess.run(["ln", "-sfn", os.path.join(WORKDIR, "zim_vit_l_2092"), zim_link], check=True)
 
     os.makedirs(os.path.join(WORKDIR, "examples", "in"), exist_ok=True)
     inp = os.path.join(WORKDIR, "examples", "in", "input.png")
