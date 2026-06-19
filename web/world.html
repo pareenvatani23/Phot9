@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phot9 — explore world</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0f13; color: #ddd;
+    font-family: system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 10px; left: 12px; font-size: 13px; opacity: .85;
+    pointer-events: none; line-height: 1.5; text-shadow: 0 1px 3px #000; }
+  #status { position: fixed; bottom: 12px; left: 12px; font-size: 13px; opacity: .9;
+    text-shadow: 0 1px 3px #000; }
+  a { color: #7db4ff; }
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(13,15,19,.92); z-index: 5; text-align: center; }
+  #drop .card { border: 2px dashed #3a4150; border-radius: 14px; padding: 38px 46px; max-width: 560px; }
+  #drop h1 { font-size: 19px; margin: 0 0 10px; }
+  #drop p { font-size: 14px; opacity: .8; line-height: 1.6; margin: 8px 0; }
+  #drop.drag .card { border-color: #7db4ff; background: rgba(125,180,255,.08); }
+  label.pick { display: inline-block; margin-top: 12px; padding: 9px 16px; border-radius: 9px;
+    background: #2b6cf0; color: #fff; cursor: pointer; font-size: 14px; }
+  #drop.hidden { display: none; }
+  kbd { background:#222630; border:1px solid #3a4150; border-radius:4px; padding:1px 5px; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="hud">
+  Phot9 world explorer<br>
+  <kbd>drag</kbd> look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>shift</kbd> faster · <kbd>scroll</kbd> speed
+</div>
+<div id="status"></div>
+
+<div id="drop">
+  <div class="card">
+    <h1>Drop your HunyuanWorld <code>.ply</code> layers here</h1>
+    <p>Unzip the <b>hunyuanworld-mesh</b> artifact and drag in the
+       <code>mesh_layer*.ply</code> files (select all of them at once).</p>
+    <p>They load entirely in your browser — nothing is uploaded.</p>
+    <label class="pick">choose .ply files<input id="file" type="file" accept=".ply" multiple hidden></label>
+    <p style="opacity:.55;font-size:12px">or pass <code>?model=&lt;url&gt;</code> for hosted meshes</p>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+
+const statusEl = document.getElementById("status");
+const dropEl = document.getElementById("drop");
+const fileEl = document.getElementById("file");
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0f13);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 5000);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404a5a, 1.2));
+const dir = new THREE.DirectionalLight(0xffffff, 0.8); dir.position.set(1, 2, 1); scene.add(dir);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const loader = new PLYLoader();
+let worldRadius = 5;
+
+function addGeometry(geo, name) {
+  geo.computeVertexNormals();
+  const hasColor = !!geo.getAttribute("color");
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: hasColor, color: hasColor ? 0xffffff : 0xb0b4bd,
+    roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide,
+  });
+  scene.add(new THREE.Mesh(geo, mat));
+  // HunyuanWorld layers are already in a shared, camera-at-origin world space —
+  // keep their coordinates so the layers stay registered to each other.
+  const box = new THREE.Box3().setFromBufferAttribute(geo.getAttribute("position"));
+  worldRadius = Math.max(worldRadius, box.getSize(new THREE.Vector3()).length() * 0.5);
+  statusEl.textContent = `loaded ${scene.children.filter(o => o.isMesh).length} layer(s)`;
+}
+
+function loadFromBuffer(buf, name) {
+  try { addGeometry(loader.parse(buf), name); }
+  catch (e) { statusEl.textContent = `failed to parse ${name}`; console.error(e); }
+}
+
+function ingestFiles(files) {
+  const plys = [...files].filter(f => f.name.toLowerCase().endsWith(".ply"));
+  if (!plys.length) return;
+  dropEl.classList.add("hidden");
+  // Camera starts at world origin (where HunyuanWorld placed the capture point).
+  camera.position.set(0, 0, 0);
+  plys.forEach(f => {
+    const r = new FileReader();
+    r.onload = () => loadFromBuffer(r.result, f.name);
+    r.readAsArrayBuffer(f);
+  });
+}
+
+fileEl.addEventListener("change", e => ingestFiles(e.target.files));
+["dragenter", "dragover"].forEach(ev => dropEl.addEventListener(ev, e => {
+  e.preventDefault(); dropEl.classList.add("drag");
+}));
+["dragleave", "drop"].forEach(ev => dropEl.addEventListener(ev, e => {
+  e.preventDefault(); dropEl.classList.remove("drag");
+}));
+dropEl.addEventListener("drop", e => ingestFiles(e.dataTransfer.files));
+
+// Optional hosted single mesh via ?model=
+const modelUrl = new URLSearchParams(location.search).get("model");
+if (modelUrl) {
+  dropEl.classList.add("hidden");
+  statusEl.textContent = "loading…";
+  loader.load(modelUrl, g => { camera.position.set(0, 0, 0); addGeometry(g, modelUrl); },
+    e => { if (e.total) statusEl.textContent = `loading… ${(100*e.loaded/e.total)|0}%`; },
+    err => { statusEl.textContent = "failed to load model"; console.error(err); });
+}
+
+// --- First-person explore: drag to look, WASD to move ---
+let yaw = 0, pitch = 0, dragging = false, px = 0, py = 0;
+const keys = {};
+let speed = 0.04;  // fraction of world radius per frame
+
+renderer.domElement.addEventListener("pointerdown", e => { dragging = true; px = e.clientX; py = e.clientY; });
+addEventListener("pointerup", () => { dragging = false; });
+addEventListener("pointermove", e => {
+  if (!dragging) return;
+  yaw -= (e.clientX - px) * 0.0035; pitch -= (e.clientY - py) * 0.0035;
+  pitch = Math.max(-1.5, Math.min(1.5, pitch));
+  px = e.clientX; py = e.clientY;
+});
+addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+renderer.domElement.addEventListener("wheel", e => {
+  e.preventDefault(); speed *= e.deltaY > 0 ? 0.9 : 1.1;
+  speed = Math.max(0.002, Math.min(0.3, speed));
+}, { passive: false });
+
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+(function animate() {
+  requestAnimationFrame(animate);
+  fwd.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+  right.crossVectors(fwd, up).normalize();
+  const step = speed * worldRadius * (keys["shift"] ? 3 : 1);
+  if (keys["w"]) camera.position.addScaledVector(fwd, step);
+  if (keys["s"]) camera.position.addScaledVector(fwd, -step);
+  if (keys["d"]) camera.position.addScaledVector(right, step);
+  if (keys["a"]) camera.position.addScaledVector(right, -step);
+  if (keys["e"]) camera.position.y += step;
+  if (keys["q"]) camera.position.y -= step;
+  camera.lookAt(camera.position.clone().add(fwd));
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
