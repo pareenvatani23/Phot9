@@ -92,14 +92,13 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
-    # utils3d on Python 3.10: the Aug-2025 commit has the flat utils3d.numpy.image_uv
-    # and imports cleanly on 3.10; later commits added create_icosahedron_mesh but use
-    # 3.11-only syntax and dropped image_uv. We install this commit and shim the
-    # missing np alias + create_icosahedron_mesh at runtime (see generate()).
-    # --no-deps protects the pinned numpy 1.24.
+    # utils3d on Python 3.10: this commit natively has both the names MoGe and
+    # HunyuanWorld need (utils3d.numpy.image_uv and utils3d.np.uv_map) and imports
+    # cleanly on 3.10. It only lacks create_icosahedron_mesh + the np alias, which we
+    # add at runtime (see generate()). --no-deps protects the pinned numpy 1.24.
     .run_commands(
         "pip install --force-reinstall --no-deps "
-        "git+https://github.com/EasternJournalist/utils3d.git@d3a577acf0a9ad7e513a1416449a07b6f47d967f"
+        "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
     )
 )
 
