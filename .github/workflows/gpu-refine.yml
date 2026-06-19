@@ -1,0 +1,73 @@
+name: Refine hero placement (PyTorch3D on Modal)
+
+# Step (b): analysis-by-synthesis refinement of the auto-placed hero. Pulls the
+# person mask (ci-clean), the ground mesh + hero (ci-world), runs
+# gpu/refine_placement.py on a Modal GPU, and prints the refined ?hx/hy/hz/hr/hs
+# to bake into web/auto.html. Needs the MODAL_TOKEN_ID / MODAL_TOKEN_SECRET repo
+# secrets (or pass them as inputs).
+on:
+  workflow_dispatch:
+    inputs:
+      modal_token_id:
+        description: "Modal token id (ak-...). Blank = MODAL_TOKEN_ID secret."
+        required: false
+      modal_token_secret:
+        description: "Modal token secret (as-...). Blank = MODAL_TOKEN_SECRET secret."
+        required: false
+      mask_url:
+        description: "person mask PNG"
+        required: false
+        default: "https://raw.githack.com/pareenvatani23/Phot9/ci-clean/out/person_mask.png"
+      ground_url:
+        description: "world_ground.ply"
+        required: false
+        default: "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/world_ground.ply"
+      hero_url:
+        description: "hero .obj"
+        required: false
+        default: "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/hero.obj"
+      init:
+        description: "initial transform: x,y,z,yaw_deg,scale"
+        required: false
+        default: "0,-0.9,-0.8,180,0.85"
+      fov_deg:
+        description: "capture-camera vertical FOV (matches the viewer)"
+        required: false
+        default: "70"
+
+permissions:
+  contents: read
+
+jobs:
+  refine:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MODAL_TOKEN_ID: ${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mask token
+        run: |
+          echo "::add-mask::${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}"
+          echo "::add-mask::${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Modal client
+        run: pip install -r gpu/requirements.txt
+      - name: Fetch assets
+        run: |
+          set -e
+          curl -fSL "${{ inputs.mask_url }}"   -o person_mask.png
+          curl -fSL "${{ inputs.ground_url }}" -o world_ground.ply
+          curl -fSL "${{ inputs.hero_url }}"   -o hero.obj
+          ls -la person_mask.png world_ground.ply hero.obj
+      - name: Run refinement on Modal
+        run: |
+          IFS=',' read -r X Y Z YAW S <<< "${{ inputs.init }}"
+          modal run gpu/refine_placement.py \
+            --hero hero.obj --mask person_mask.png --ground world_ground.ply \
+            --x "$X" --y "$Y" --z "$Z" --yaw-deg "$YAW" --scale "$S" \
+            --fov-deg "${{ inputs.fov_deg }}"

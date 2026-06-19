@@ -23,6 +23,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--mask-out", default="out/person_mask.png",
+                    help="tight person mask (white=person) for placement refinement")
     ap.add_argument("--dilate", type=int, default=21, help="grow the mask to cover edges/shadow")
     args = ap.parse_args()
 
@@ -30,7 +32,15 @@ def main() -> None:
 
     # Person mask (white = person). Human-seg model catches all people in frame.
     mask = remove(img, only_mask=True, session=new_session("u2net_human_seg"))
-    m = (np.array(mask) > 30).astype(np.uint8) * 255
+    tight = (np.array(mask) > 30).astype(np.uint8) * 255
+    # Save the tight (un-dilated) mask: gpu/refine_placement.py matches the hero
+    # silhouette against it. The dilated copy below is only for inpainting coverage.
+    if args.mask_out:
+        os.makedirs(os.path.dirname(args.mask_out) or ".", exist_ok=True)
+        Image.fromarray(tight).save(args.mask_out)
+        print(f"PERSON_MASK_OK wrote {args.mask_out} "
+              f"({100 * (tight > 0).mean():.1f}% of pixels)")
+    m = tight
     if args.dilate > 0:
         m = cv2.dilate(m, np.ones((args.dilate, args.dilate), np.uint8), iterations=1)
     print(f"mask coverage: {100 * (m > 0).mean():.1f}% of pixels")

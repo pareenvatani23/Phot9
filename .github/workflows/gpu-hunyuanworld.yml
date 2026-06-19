@@ -11,11 +11,11 @@ on:
   workflow_dispatch:
     inputs:
       modal_token_id:
-        description: "Modal token id (ak-...)"
-        required: true
+        description: "Modal token id (ak-...). Leave blank to use the MODAL_TOKEN_ID repo secret."
+        required: false
       modal_token_secret:
-        description: "Modal token secret (as-...)"
-        required: true
+        description: "Modal token secret (as-...). Leave blank to use the MODAL_TOKEN_SECRET repo secret."
+        required: false
       image:
         description: "image path in repo"
         required: false
@@ -34,15 +34,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      MODAL_TOKEN_ID: ${{ inputs.modal_token_id }}
-      MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret }}
+      MODAL_TOKEN_ID: ${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - name: Mask token
         run: |
-          echo "::add-mask::${{ inputs.modal_token_id }}"
-          echo "::add-mask::${{ inputs.modal_token_secret }}"
+          echo "::add-mask::${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}"
+          echo "::add-mask::${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

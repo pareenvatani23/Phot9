@@ -43,7 +43,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: clean-plate
-          path: out/clean.png
+          path: |
+            out/clean.png
+            out/person_mask.png
           if-no-files-found: warn
 
       - name: Publish to ci-clean
@@ -52,6 +54,9 @@ jobs:
           git config user.name "ci"; git config user.email "ci@local"
           git checkout --orphan ci-clean
           git rm -rf --cached . >/dev/null 2>&1 || true
+          # clean.png feeds the world generator; person_mask.png feeds the
+          # placement refiner (gpu/refine_placement.py).
           git add -f out/clean.png
+          test -f out/person_mask.png && git add -f out/person_mask.png || true
           git commit -q -m "clean plate $(date -u +%FT%TZ)"
           git push -f origin ci-clean
