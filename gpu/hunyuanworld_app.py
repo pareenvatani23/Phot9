@@ -59,7 +59,7 @@ image = (
         "ultralytics==8.3.74", "opencv-python==4.11.0.86", "trimesh",
         "open3d", "einops", "omegaconf", "huggingface_hub",
     )
-    .pip_install("git+https://github.com/microsoft/MoGe.git")
+    .pip_install("git+https://github.com/microsoft/MoGe.git@72fdee9")
     # The repo + ZIM + Real-ESRGAN.
     .run_commands(
         f"git clone {REPO} {WORKDIR}",
@@ -92,13 +92,14 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
-    # utils3d on Python 3.10: this commit natively has both the names MoGe and
-    # HunyuanWorld need (utils3d.numpy.image_uv and utils3d.np.uv_map) and imports
-    # cleanly on 3.10. It only lacks create_icosahedron_mesh + the np alias, which we
-    # add at runtime (see generate()). --no-deps protects the pinned numpy 1.24.
+    # Pin utils3d to the exact commit MoGe 72fdee9 (HunyuanWorld's July-2025 release era)
+    # expects, so MoGe's calls match natively instead of drifting against main. Any
+    # functions HunyuanWorld needs that this commit lacks are shimmed in generate().
+    # --no-deps + numpy re-pin keep the env on numpy 1.24.
     .run_commands(
         "pip install --force-reinstall --no-deps "
-        "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8"
+        "git+https://github.com/EasternJournalist/utils3d.git@c5daf6f6c244d251f252102d09e9b7bcef791a38 && "
+        "pip install numpy==1.24.1"
     )
 )
 
@@ -136,19 +137,22 @@ def generate(image_bytes: bytes, hf_token: str,
     # py3.10-compatible commit predates. image_uv is already native here.
     import textwrap
     import utils3d
+    import utils3d.numpy as _u3dnp
     u3d = os.path.dirname(utils3d.__file__)
     top_init = os.path.join(u3d, "__init__.py")
     if "import numpy as np" not in open(top_init).read():
         open(top_init, "a").write("\nfrom utils3d import numpy as np\n")
-    np_init = os.path.join(u3d, "numpy", "__init__.py")
-    if "def create_icosahedron_mesh" not in open(np_init).read():
-        open(np_init, "a").write(textwrap.dedent('''
-            import numpy as _np
-            def uv_map(size, *args, **kwargs):
-                # MoGe's new-API name for image_uv; delegate to keep identical geometry.
-                import utils3d.numpy as _m
-                h, w = int(size[0]), int(size[1])
-                return _m.image_uv(width=w, height=h)
+    # Only shim functions HunyuanWorld needs that this utils3d commit lacks — guarded
+    # by hasattr so we never shadow a native implementation MoGe depends on.
+    shims = {
+        "image_uv": '''
+            def image_uv(height=None, width=None, *a, **k):
+                u = (_np.arange(width) + 0.5) / width
+                v = (_np.arange(height) + 0.5) / height
+                u, v = _np.meshgrid(u, v, indexing="xy")
+                return _np.stack([u, v], -1).astype(_np.float32)
+        ''',
+        "create_icosahedron_mesh": '''
             def create_icosahedron_mesh():
                 A = (1 + 5 ** 0.5) / 2
                 vertices = _np.array([
@@ -161,7 +165,16 @@ def generate(image_bytes: bytes, hf_token: str,
                     [1, 6, 8], [8, 9, 4], [4, 2, 5], [5, 11, 10], [10, 7, 1],
                     [2, 4, 9], [9, 8, 6], [6, 1, 7], [7, 10, 11], [11, 5, 2]], dtype=_np.int32)
                 return vertices, faces
-        '''))
+        ''',
+    }
+    missing = [src for name, src in shims.items() if not hasattr(_u3dnp, name)]
+    if missing:
+        np_init = os.path.join(u3d, "numpy", "__init__.py")
+        with open(np_init, "a") as f:
+            f.write("\nimport numpy as _np\n")
+            for src in missing:
+                f.write(textwrap.dedent(src))
+        print("utils3d shims added:", [n for n in shims if not hasattr(_u3dnp, n)])
 
     os.makedirs(os.path.join(WORKDIR, "examples", "in"), exist_ok=True)
     inp = os.path.join(WORKDIR, "examples", "in", "input.png")
