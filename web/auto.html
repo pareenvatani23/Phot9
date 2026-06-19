@@ -110,7 +110,9 @@ addEventListener("resize", () => {
 
 const loader = new PLYLoader();
 let worldRadius = 5;
-const worldMeshes = [];   // meshes we raycast against for ground-finding
+let skyRadius = 0;        // max vertex distance from origin ≈ HunyuanWorld sky-sphere radius
+const worldMeshes = [];   // visible scene meshes
+const groundMeshes = [];  // dedicated foreground/ground mesh (sky removed), raycast target
 
 function addGeometry(geo, name) {
   geo.computeVertexNormals();
@@ -124,6 +126,13 @@ function addGeometry(geo, name) {
   const mesh = new THREE.Mesh(geo, mat);
   scene.add(mesh);
   worldMeshes.push(mesh);
+  // Track the sky-sphere radius (max vertex distance from the camera origin) so the
+  // ground solve can reject hits on the sky dome.
+  const pos = geo.getAttribute("position");
+  for (let i = 0; i < pos.count; i++) {
+    const r = Math.hypot(pos.getX(i), pos.getY(i), pos.getZ(i));
+    if (r > skyRadius) skyRadius = r;
+  }
   // HunyuanWorld layers are already in a shared, camera-at-origin world space —
   // keep their coordinates so the layers stay registered to each other.
   const box = new THREE.Box3().setFromBufferAttribute(geo.getAttribute("position"));
@@ -177,6 +186,20 @@ loader.load(modelUrl,
     statusEl.textContent = "no published world yet — drop your .ply files";
   });
 
+// Optional dedicated ground mesh: the foreground with the sky sphere removed (so the
+// ground solve raycasts real terrain, not the dome). Published by the GPU job; if it
+// isn't there yet we fall back to the full world with a sky-radius cutoff. It's a
+// raycast target only — not rendered (visuals come from the merged world above).
+const GROUND_URL = new URLSearchParams(location.search).get("ground")
+  || "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/world_ground.ply";
+loader.load(GROUND_URL, g => {
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial());
+  m.visible = false; scene.add(m); groundMeshes.push(m);
+  // Re-solve now that a cleaner ground is available (unless overridden / manual).
+  if (placed && Q.get("noauto") !== "1" && !["hx","hy","hz"].some(k => Q.has(k))) autoPlace();
+}, undefined, () => {/* no ground mesh published yet — fine, we fall back */});
+
 // --- Hero figure (PSHuman) composited into the scene ---
 // HunyuanWorld bakes a smeared person into the world; we drop a clean PSHuman
 // reconstruction on top. Unlike world.html (manual sliders), this page places the
@@ -211,8 +234,13 @@ function syncSliders() {
 // recedes) and keep the nearest up-facing hit per ray — the foreground ground, not
 // the far sky sphere. Returns a chosen foot point or null.
 function solveGround() {
-  if (!worldMeshes.length) return null;
-  const rc = new THREE.Raycaster(); rc.far = worldRadius * 0.9;
+  // Prefer the dedicated ground mesh (sky already removed); else raycast the full
+  // world but reject hits on the sky dome by radius.
+  const usingGround = groundMeshes.length > 0;
+  const targets = usingGround ? groundMeshes : worldMeshes;
+  if (!targets.length) return null;
+  const skyCut = usingGround ? Infinity : (skyRadius > 0 ? skyRadius * 0.8 : worldRadius * 0.6);
+  const rc = new THREE.Raycaster(); rc.far = (skyRadius || worldRadius) * 1.1;
   const O = new THREE.Vector3(0, 0, 0);
   const cands = [];
   for (let azOff = -30; azOff <= 30; azOff += 10) {          // ±30° around front
@@ -221,12 +249,12 @@ function solveGround() {
       const cp = Math.cos(THREE.MathUtils.degToRad(pit)), sp = Math.sin(THREE.MathUtils.degToRad(pit));
       const d = new THREE.Vector3(Math.sin(az) * cp, sp, Math.cos(az) * cp).normalize();
       rc.set(O, d);
-      const hit = rc.intersectObjects(worldMeshes, false)[0];
+      const hit = rc.intersectObjects(targets, false)[0];
       if (!hit) continue;
       // surface normal (object space ≈ world space here; no transforms applied)
       let ny = 0.5;
       if (hit.face && hit.face.normal) { ny = Math.abs(hit.face.normal.y); }
-      if (hit.distance < worldRadius * 0.6 && ny > 0.3) cands.push(hit);
+      if (hit.distance < skyCut && ny > 0.3) cands.push(hit);
     }
   }
   if (!cands.length) return null;

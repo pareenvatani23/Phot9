@@ -63,11 +63,13 @@ jobs:
         continue-on-error: true  # full layers stay in the artifact; only the slim merged mesh is published
         run: |
           test -f out/world_merged.ply || { echo "no merged mesh to publish"; exit 0; }
-          ls -la out/world_merged.ply
+          ls -la out/world_merged.ply out/world_ground.ply 2>/dev/null || true
           git config user.name "ci"; git config user.email "ci@local"
           git checkout --orphan ci-world
           git rm -rf --cached . >/dev/null 2>&1 || true
-          # Publish the slim merged mesh + the viewer so one ci-world URL serves both.
-          git add -f out/world_merged.ply web/world.html
+          # Publish the slim merged mesh (visuals) + the foreground ground mesh
+          # (auto.html raycast target) + both viewers so one ci-world URL serves all.
+          git add -f out/world_merged.ply web/world.html web/auto.html
+          test -f out/world_ground.ply && git add -f out/world_ground.ply || true
           git commit -q -m "HunyuanWorld preview $(date -u +%FT%TZ)"
           git push -f origin ci-world

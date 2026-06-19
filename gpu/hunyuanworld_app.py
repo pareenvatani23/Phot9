@@ -202,6 +202,7 @@ def generate(image_bytes: bytes, hf_token: str,
     # (world.html?model=). These RGBD layers carry per-vertex colors, which
     # open3d's quadric decimation preserves; trimesh/open3d are already baked in.
     try:
+        import numpy as _np
         import open3d as o3d
         merged = o3d.geometry.TriangleMesh()
         for p in plys:
@@ -209,6 +210,34 @@ def generate(image_bytes: bytes, hf_token: str,
             if len(m.triangles):
                 merged += m
         if len(merged.triangles):
+            # Foreground/ground mesh: drop the sky sphere (faces near the max vertex
+            # radius) so web/auto.html can raycast real terrain, not the dome. Built
+            # from the FULL-res merge (before the preview decimation below) and kept
+            # higher-res than the preview since the placement solve raycasts it.
+            try:
+                fullV = _np.asarray(merged.vertices)
+                fullF = _np.asarray(merged.triangles)
+                sky_r = float(_np.linalg.norm(fullV, axis=1).max())
+                fc = fullV[fullF].mean(axis=1)
+                keep = _np.linalg.norm(fc, axis=1) < sky_r * 0.8
+                if keep.any():
+                    gm = o3d.geometry.TriangleMesh(
+                        merged.vertices, o3d.utility.Vector3iVector(fullF[keep]))
+                    if merged.has_vertex_colors():
+                        gm.vertex_colors = merged.vertex_colors
+                    gm.remove_unreferenced_vertices()
+                    GT = 800_000
+                    if len(gm.triangles) > GT:
+                        gm = gm.simplify_quadric_decimation(GT)
+                    gm.remove_duplicated_vertices()
+                    gp = os.path.join(out, "world_ground.ply")
+                    o3d.io.write_triangle_mesh(gp, gm, write_ascii=False)
+                    plys.append(gp)
+                    print("WORLD_GROUND:", gp, os.path.getsize(gp), "bytes",
+                          "tris", len(gm.triangles), "sky_r", round(sky_r, 2))
+            except Exception as e:
+                print("ground export failed:", repr(e))
+
             TARGET = 400_000
             if len(merged.triangles) > TARGET:
                 merged = merged.simplify_quadric_decimation(TARGET)
