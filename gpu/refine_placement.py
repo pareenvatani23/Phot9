@@ -93,10 +93,13 @@ def refine(hero_obj_bytes: bytes, mask_png_bytes: bytes, ground_ply_bytes: bytes
                             SoftSilhouetteShader(blend_params=blend))
 
     # --- free parameters: translation, yaw, log-scale (uniform) ---
-    t = torch.tensor([init["x"], init["y"], init["z"]], device=dev, requires_grad=True)
-    yaw = torch.tensor([np.radians(init["yaw_deg"])], device=dev, requires_grad=True)
+    # dtype=float32 is load-bearing: np.radians/np.log return numpy float64, and
+    # torch.tensor([<np.float64>]) would infer float64, making the transformed
+    # verts float64 and tripping PyTorch3D's rasterizer bmm ("Float vs Double").
+    t = torch.tensor([init["x"], init["y"], init["z"]], dtype=torch.float32, device=dev, requires_grad=True)
+    yaw = torch.tensor([np.radians(init["yaw_deg"])], dtype=torch.float32, device=dev, requires_grad=True)
     target_scale = float(init.get("scale", 1.0))        # auto.html scale = TARGET_H/2 style
-    log_s = torch.tensor([np.log(max(target_scale, 1e-3))], device=dev, requires_grad=True)
+    log_s = torch.tensor([np.log(max(target_scale, 1e-3))], dtype=torch.float32, device=dev, requires_grad=True)
     # auto.html applies scale*fit where fit=2/base_h; fold that so world height = s*2.
     fit = 2.0 / base_h
 
