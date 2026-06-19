@@ -60,6 +60,7 @@ jobs:
           path: out/
           if-no-files-found: warn
       - name: Publish to ci-world
+        continue-on-error: true  # meshes can exceed git push limits; artifact is the deliverable
         run: |
           test -d out && [ -n "$(ls -A out 2>/dev/null)" ] || { echo "no outputs"; exit 0; }
           git config user.name "ci"; git config user.email "ci@local"
