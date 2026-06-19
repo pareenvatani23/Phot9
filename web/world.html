@@ -34,6 +34,14 @@
   #hud .touch { display: none; }
   body.is-touch #hud .touch { display: inline; }
   body.is-touch #hud .desk { display: none; }
+  #hero-ui { position: fixed; top: 52px; right: 12px; z-index: 4; width: 188px;
+    background: rgba(13,15,19,.82); border: 1px solid #3a4150; border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; }
+  #hero-ui.hidden { display: none; }
+  #hero-ui label { display: block; margin: 7px 0 2px; opacity: .85; }
+  #hero-ui input[type=range] { width: 100%; }
+  #hero-ui button { margin-top: 9px; width: 100%; padding: 6px; border-radius: 7px;
+    border: 1px solid #3a4150; background: #2b6cf0; color: #fff; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -44,6 +52,15 @@
 </div>
 <div id="status"></div>
 <div id="stick" class="hidden"><div id="knob"></div></div>
+<div id="hero-ui" class="hidden">
+  <b>Hero placement</b>
+  <label>size</label><input type="range" id="h-scale" min="0.1" max="6" step="0.05" value="1">
+  <label>forward / back</label><input type="range" id="h-z" min="-15" max="15" step="0.1" value="4">
+  <label>left / right</label><input type="range" id="h-x" min="-15" max="15" step="0.1" value="0">
+  <label>height</label><input type="range" id="h-y" min="-8" max="8" step="0.1" value="0">
+  <label>turn</label><input type="range" id="h-rot" min="0" max="360" step="1" value="0">
+  <button id="h-front">drop in front of me</button>
+</div>
 
 <div id="drop">
   <div class="card">
@@ -66,6 +83,7 @@
 <script type="module">
 import * as THREE from "three";
 import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 
 const statusEl = document.getElementById("status");
 const dropEl = document.getElementById("drop");
@@ -151,6 +169,54 @@ loader.load(modelUrl,
     dropEl.classList.remove("hidden");
     statusEl.textContent = "no published world yet — drop your .ply files";
   });
+
+// --- Hero figure (PSHuman) composited into the scene ---
+// HunyuanWorld bakes a smeared person into the world; we drop a clean PSHuman
+// reconstruction on top. Auto-aligning into a panoramic depth shell is unreliable,
+// so placement is interactive (the panel, top-right). ?hero=<url> overrides.
+const DEFAULT_HERO = "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/hero.obj";
+const heroUrl = new URLSearchParams(location.search).get("hero") || DEFAULT_HERO;
+const heroGroup = new THREE.Group(); scene.add(heroGroup);
+const heroPanel = document.getElementById("hero-ui");
+const hero = { scale: 1, x: 0, y: 0, z: 4, rot: 0, fit: 1 };
+function applyHero() {
+  heroGroup.position.set(hero.x, hero.y, hero.z);
+  heroGroup.rotation.set(0, hero.rot * Math.PI / 180, 0);
+  const s = hero.scale * hero.fit; heroGroup.scale.set(s, s, s);
+}
+new OBJLoader().load(heroUrl, obj => {
+  // Normalize: center X/Z, feet (min Y) at the group origin so 'height' rests it on a floor.
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  obj.position.set(-ctr.x, -box.min.y, -ctr.z);
+  obj.traverse(c => {
+    if (c.isMesh) {
+      const hasColor = !!c.geometry.getAttribute("color");
+      c.material = new THREE.MeshBasicMaterial({
+        vertexColors: hasColor, color: hasColor ? 0xffffff : 0xc8b89a, side: THREE.DoubleSide,
+      });
+    }
+  });
+  hero.fit = 2.0 / (size.y || 1);   // default ~2 units tall; tune with the size slider
+  heroGroup.add(obj); applyHero();
+  heroPanel.classList.remove("hidden");
+}, undefined, err => console.warn("hero load failed (set ?hero=<url> or ignore):", err));
+
+const bindHero = (id, key) => {
+  const el = document.getElementById(id);
+  el.addEventListener("input", () => { hero[key] = parseFloat(el.value); applyHero(); });
+};
+["h-scale,scale", "h-z,z", "h-x,x", "h-y,y", "h-rot,rot"].forEach(s => bindHero(...s.split(",")));
+document.getElementById("h-front").addEventListener("click", () => {
+  const f = fwd.clone(); f.y = 0; f.normalize();
+  hero.x = camera.position.x + f.x * 4;
+  hero.z = camera.position.z + f.z * 4;
+  hero.rot = Math.atan2(-f.x, -f.z) * 180 / Math.PI;   // face the camera
+  document.getElementById("h-x").value = hero.x.toFixed(1);
+  document.getElementById("h-z").value = hero.z.toFixed(1);
+  document.getElementById("h-rot").value = hero.rot.toFixed(0);
+  applyHero();
+});
 
 // --- First-person explore (desktop: drag+WASD+wheel; touch: drag+joystick+pinch) ---
 let yaw = 0, pitch = 0, pinch = 0;
