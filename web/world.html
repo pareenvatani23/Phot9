@@ -93,9 +93,11 @@ let worldRadius = 5;
 function addGeometry(geo, name) {
   geo.computeVertexNormals();
   const hasColor = !!geo.getAttribute("color");
-  const mat = new THREE.MeshStandardMaterial({
+  // Unlit: these are photographic, baked-color meshes. A lit material would shade
+  // them by the (noisy, post-decimation) normals and wreck the captured colors.
+  const mat = new THREE.MeshBasicMaterial({
     vertexColors: hasColor, color: hasColor ? 0xffffff : 0xb0b4bd,
-    roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide,
+    side: THREE.DoubleSide,
   });
   scene.add(new THREE.Mesh(geo, mat));
   // HunyuanWorld layers are already in a shared, camera-at-origin world space —
@@ -153,7 +155,10 @@ loader.load(modelUrl,
 // --- First-person explore (desktop: drag+WASD+wheel; touch: drag+joystick+pinch) ---
 let yaw = 0, pitch = 0, pinch = 0;
 const keys = {}, move = { x: 0, y: 0 };
-let speed = 0.04;  // fraction of world radius per frame
+// A HunyuanWorld scene is a panoramic depth shell: a huge sky sphere (worldRadius)
+// wrapping a thin foreground slab. Movement must track the *scene*, not the sky, or
+// one key-press flings you out the back. Use a small fraction of worldRadius.
+let speed = 0.0025;
 
 // Look / pinch via unified Pointer Events on the canvas. One active pointer rotates
 // the view; two pointers pinch to dolly forward/back. (The joystick captures its own
@@ -211,7 +216,7 @@ addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
 addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
 cvs.addEventListener("wheel", e => {
   e.preventDefault(); speed *= e.deltaY > 0 ? 0.9 : 1.1;
-  speed = Math.max(0.002, Math.min(0.3, speed));
+  speed = Math.max(0.0004, Math.min(0.05, speed));
 }, { passive: false });
 
 const fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
