@@ -80,8 +80,12 @@ def refine(hero_obj_bytes: bytes, mask_png_bytes: bytes, ground_ply_bytes: bytes
     ground_y = float(np.median(near[:, 1])) if len(near) else float(init["y"])
 
     # --- camera: at origin, looking at the initial foot point, given FOV ---
-    R, T = look_at_view_transform(eye=((0, 0, 0),), at=(tuple(foot0),), up=((0, 1, 0),), device=dev)
-    cam = FoVPerspectiveCameras(device=dev, R=R, T=T, fov=fov_deg)
+    # foot0 is float32 numpy; pass plain floats and force the R/T matrices to
+    # float32, else PyTorch3D's world->view bmm hits "expected Float, found Double".
+    at = tuple(float(v) for v in foot0)
+    R, T = look_at_view_transform(eye=((0., 0., 0.),), at=(at,), up=((0., 1., 0.),), device=dev)
+    R, T = R.to(torch.float32), T.to(torch.float32)
+    cam = FoVPerspectiveCameras(device=dev, R=R, T=T, fov=float(fov_deg))
     blend = BlendParams(sigma=1e-4, gamma=1e-4)
     raster = RasterizationSettings(image_size=size, blur_radius=np.log(1. / 1e-4 - 1.) * blend.sigma,
                                    faces_per_pixel=50)
