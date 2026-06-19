@@ -92,6 +92,11 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
+    # HunyuanWorld/MoGe need utils3d at this exact commit (has utils3d.numpy.image_uv);
+    # a transitive install pulled an incompatible version. Pin it last.
+    .pip_install(
+        "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183"
+    )
 )
 
 
