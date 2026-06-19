@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phot9 — explore world</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0f13; color: #ddd;
+    font-family: system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 10px; left: 12px; font-size: 13px; opacity: .85;
+    pointer-events: none; line-height: 1.5; text-shadow: 0 1px 3px #000; }
+  #status { position: fixed; bottom: 12px; left: 12px; font-size: 13px; opacity: .9;
+    text-shadow: 0 1px 3px #000; }
+  a { color: #7db4ff; }
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(13,15,19,.92); z-index: 5; text-align: center; }
+  #drop .card { border: 2px dashed #3a4150; border-radius: 14px; padding: 38px 46px; max-width: 560px; }
+  #drop h1 { font-size: 19px; margin: 0 0 10px; }
+  #drop p { font-size: 14px; opacity: .8; line-height: 1.6; margin: 8px 0; }
+  #drop.drag .card { border-color: #7db4ff; background: rgba(125,180,255,.08); }
+  label.pick { display: inline-block; margin-top: 12px; padding: 9px 16px; border-radius: 9px;
+    background: #2b6cf0; color: #fff; cursor: pointer; font-size: 14px; }
+  #drop.hidden { display: none; }
+  kbd { background:#222630; border:1px solid #3a4150; border-radius:4px; padding:1px 5px; font-size:12px; }
+  canvas { display: block; touch-action: none; }
+  /* On-screen move pad (touch + mouse). */
+  #stick { position: fixed; left: 18px; bottom: 18px; width: 104px; height: 104px;
+    border-radius: 50%; background: rgba(255,255,255,.05); border: 1px solid #3a4150;
+    touch-action: none; z-index: 4; }
+  #stick.hidden { display: none; }
+  #knob { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px;
+    margin: -23px 0 0 -23px; border-radius: 50%; background: rgba(125,180,255,.45);
+    border: 1px solid #7db4ff; }
+  #hud .touch { display: none; }
+  body.is-touch #hud .touch { display: inline; }
+  body.is-touch #hud .desk { display: none; }
+  #hero-ui { position: fixed; top: 52px; right: 12px; z-index: 4; width: 188px;
+    background: rgba(13,15,19,.82); border: 1px solid #3a4150; border-radius: 10px;
+    padding: 10px 12px; font-size: 12px; }
+  #hero-ui.hidden { display: none; }
+  #hero-ui label { display: block; margin: 7px 0 2px; opacity: .85; }
+  #hero-ui input[type=range] { width: 100%; }
+  #hero-ui button { margin-top: 9px; width: 100%; padding: 6px; border-radius: 7px;
+    border: 1px solid #3a4150; background: #2b6cf0; color: #fff; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="hud">
+  Phot9 — <b>auto-placed</b> diorama<br>
+  <span class="desk"><kbd>drag</kbd> look · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move · <kbd>Q</kbd>/<kbd>E</kbd> down/up · <kbd>shift</kbd> faster · <kbd>scroll</kbd> speed</span>
+  <span class="touch">drag to look · joystick to move · pinch to go forward</span>
+</div>
+<div id="status"></div>
+<div id="stick" class="hidden"><div id="knob"></div></div>
+<div id="hero-ui" class="hidden">
+  <b>Hero placement</b>
+  <label>size</label><input type="range" id="h-scale" min="0.1" max="6" step="0.05" value="1">
+  <label>forward / back</label><input type="range" id="h-z" min="-15" max="15" step="0.1" value="4">
+  <label>left / right</label><input type="range" id="h-x" min="-15" max="15" step="0.1" value="0">
+  <label>height</label><input type="range" id="h-y" min="-8" max="8" step="0.1" value="0">
+  <label>turn</label><input type="range" id="h-rot" min="0" max="360" step="1" value="0">
+  <button id="h-auto">re-run auto-place</button>
+  <button id="h-front">drop in front of me</button>
+  <button id="h-copy">copy placement URL</button>
+  <div id="h-readout" style="margin-top:7px;font-size:11px;opacity:.7;word-break:break-all"></div>
+</div>
+
+<div id="drop">
+  <div class="card">
+    <h1>Drop your HunyuanWorld <code>.ply</code> layers here</h1>
+    <p>Unzip the <b>hunyuanworld-mesh</b> artifact and drag in the
+       <code>mesh_layer*.ply</code> files (select all of them at once).</p>
+    <p>They load entirely in your browser — nothing is uploaded.</p>
+    <label class="pick">choose .ply files<input id="file" type="file" accept=".ply" multiple hidden></label>
+    <p style="opacity:.55;font-size:12px">or pass <code>?model=&lt;url&gt;</code> for hosted meshes</p>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { PLYLoader } from "three/addons/loaders/PLYLoader.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
+
+const statusEl = document.getElementById("status");
+const dropEl = document.getElementById("drop");
+const fileEl = document.getElementById("file");
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0f13);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 5000);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x404a5a, 1.2));
+const dir = new THREE.DirectionalLight(0xffffff, 0.8); dir.position.set(1, 2, 1); scene.add(dir);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const loader = new PLYLoader();
+let worldRadius = 5;
+const worldMeshes = [];   // meshes we raycast against for ground-finding
+
+function addGeometry(geo, name) {
+  geo.computeVertexNormals();
+  const hasColor = !!geo.getAttribute("color");
+  // Unlit: these are photographic, baked-color meshes. A lit material would shade
+  // them by the (noisy, post-decimation) normals and wreck the captured colors.
+  const mat = new THREE.MeshBasicMaterial({
+    vertexColors: hasColor, color: hasColor ? 0xffffff : 0xb0b4bd,
+    side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  scene.add(mesh);
+  worldMeshes.push(mesh);
+  // HunyuanWorld layers are already in a shared, camera-at-origin world space —
+  // keep their coordinates so the layers stay registered to each other.
+  const box = new THREE.Box3().setFromBufferAttribute(geo.getAttribute("position"));
+  worldRadius = Math.max(worldRadius, box.getSize(new THREE.Vector3()).length() * 0.5);
+  statusEl.textContent = `loaded ${scene.children.filter(o => o.isMesh).length} layer(s)`;
+  worldReady = true; maybeAutoPlace();
+}
+
+function loadFromBuffer(buf, name) {
+  try { addGeometry(loader.parse(buf), name); }
+  catch (e) { statusEl.textContent = `failed to parse ${name}`; console.error(e); }
+}
+
+function ingestFiles(files) {
+  const plys = [...files].filter(f => f.name.toLowerCase().endsWith(".ply"));
+  if (!plys.length) return;
+  dropEl.classList.add("hidden");
+  // Camera starts at world origin (where HunyuanWorld placed the capture point).
+  camera.position.set(0, 0, 0);
+  plys.forEach(f => {
+    const r = new FileReader();
+    r.onload = () => loadFromBuffer(r.result, f.name);
+    r.readAsArrayBuffer(f);
+  });
+}
+
+fileEl.addEventListener("change", e => ingestFiles(e.target.files));
+// Drop files anywhere in the window (the drop card hides once a world loads).
+["dragenter", "dragover"].forEach(ev => addEventListener(ev, e => {
+  e.preventDefault(); if (!dropEl.classList.contains("hidden")) dropEl.classList.add("drag");
+}));
+["dragleave", "drop"].forEach(ev => addEventListener(ev, e => {
+  e.preventDefault(); dropEl.classList.remove("drag");
+}));
+addEventListener("drop", e => ingestFiles(e.dataTransfer.files));
+
+// Auto-load the latest published world (the merged, decimated preview mesh) so the
+// page is a single zero-download link. ?model=<url> overrides; on failure we fall
+// back to the drop card so local .ply files still work.
+const DEFAULT_WORLD =
+  "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/world_merged.ply";
+const modelUrl = new URLSearchParams(location.search).get("model") || DEFAULT_WORLD;
+dropEl.classList.add("hidden");
+statusEl.textContent = "loading world…";
+loader.load(modelUrl,
+  g => { camera.position.set(0, 0, 0); addGeometry(g, modelUrl); },
+  e => { if (e.total) statusEl.textContent = `loading world… ${(100*e.loaded/e.total)|0}%`; },
+  err => {
+    console.error(err);
+    dropEl.classList.remove("hidden");
+    statusEl.textContent = "no published world yet — drop your .ply files";
+  });
+
+// --- Hero figure (PSHuman) composited into the scene ---
+// HunyuanWorld bakes a smeared person into the world; we drop a clean PSHuman
+// reconstruction on top. Unlike world.html (manual sliders), this page places the
+// figure AUTOMATICALLY: raycast the scene mesh to find the ground in front, seat the
+// feet there, scale to a real human height, and turn it to face the camera.
+// ?hero=<url> overrides the mesh; ?hx/hy/hz/hs/hr override the solved transform;
+// ?height=<m> sets the target height; ?noauto=1 disables the auto solve.
+const Q = new URLSearchParams(location.search);
+const DEFAULT_HERO = "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/hero.obj";
+const heroUrl = Q.get("hero") || DEFAULT_HERO;
+const TARGET_H = parseFloat(Q.get("height") || "1.7");   // meters; world is MoGe-metric
+const heroGroup = new THREE.Group(); scene.add(heroGroup);
+const heroPanel = document.getElementById("hero-ui");
+const hero = { scale: TARGET_H / 2.0, x: 0, y: 0, z: -3, rot: 180, fit: 1 };
+let worldReady = false, heroReady = false, placed = false;
+
+function applyHero() {
+  heroGroup.position.set(hero.x, hero.y, hero.z);
+  heroGroup.rotation.set(0, hero.rot * Math.PI / 180, 0);
+  const s = hero.scale * hero.fit; heroGroup.scale.set(s, s, s);
+}
+function syncSliders() {
+  for (const [id, k] of [["h-scale","scale"],["h-z","z"],["h-x","x"],["h-y","y"],["h-rot","rot"]]) {
+    const el = document.getElementById(id); if (el) el.value = hero[k];
+  }
+  const ro = document.getElementById("h-readout");
+  if (ro) ro.textContent = `x=${hero.x.toFixed(2)} y=${hero.y.toFixed(2)} z=${hero.z.toFixed(2)} `
+    + `scale=${hero.scale.toFixed(2)} yaw=${hero.rot.toFixed(0)}°`;
+}
+
+// Raycast a downward fan toward the scene front (−Z, where the HunyuanWorld ground
+// recedes) and keep the nearest up-facing hit per ray — the foreground ground, not
+// the far sky sphere. Returns a chosen foot point or null.
+function solveGround() {
+  if (!worldMeshes.length) return null;
+  const rc = new THREE.Raycaster(); rc.far = worldRadius * 0.9;
+  const O = new THREE.Vector3(0, 0, 0);
+  const cands = [];
+  for (let azOff = -30; azOff <= 30; azOff += 10) {          // ±30° around front
+    for (let pit = -25; pit >= -72; pit -= 6) {              // look downward
+      const az = Math.PI + THREE.MathUtils.degToRad(azOff);  // π = −Z front
+      const cp = Math.cos(THREE.MathUtils.degToRad(pit)), sp = Math.sin(THREE.MathUtils.degToRad(pit));
+      const d = new THREE.Vector3(Math.sin(az) * cp, sp, Math.cos(az) * cp).normalize();
+      rc.set(O, d);
+      const hit = rc.intersectObjects(worldMeshes, false)[0];
+      if (!hit) continue;
+      // surface normal (object space ≈ world space here; no transforms applied)
+      let ny = 0.5;
+      if (hit.face && hit.face.normal) { ny = Math.abs(hit.face.normal.y); }
+      if (hit.distance < worldRadius * 0.6 && ny > 0.3) cands.push(hit);
+    }
+  }
+  if (!cands.length) return null;
+  cands.sort((a, b) => a.distance - b.distance);
+  // Avoid placing the figure right under the lens: prefer the nearest ground hit at
+  // least ~1.2 m away; if the scene's near ground is all closer, take the farthest.
+  const far = cands.filter(c => c.distance >= 1.2);
+  return (far.length ? far[0] : cands[cands.length - 1]).point.clone();
+}
+
+function autoPlace() {
+  const foot = solveGround();
+  if (foot) {
+    hero.x = foot.x; hero.y = foot.y; hero.z = foot.z;
+    // Face the camera (origin): same convention as world.html's "drop in front".
+    const toCam = new THREE.Vector3().subVectors(O0, foot);
+    hero.rot = Math.atan2(toCam.x, toCam.z) * 180 / Math.PI;
+    statusEl.textContent = "auto-placed on scene ground · drag to look around";
+  } else {
+    statusEl.textContent = "auto-place found no ground — using fallback (tweak with the panel)";
+  }
+  // URL overrides win over the solve (lets us bake a verified placement).
+  for (const [p, k] of [["hx","x"],["hy","y"],["hz","z"],["hs","scale"],["hr","rot"]]) {
+    if (Q.has(p)) hero[k] = parseFloat(Q.get(p));
+  }
+  applyHero(); syncSliders();
+}
+const O0 = new THREE.Vector3(0, 0, 0);
+
+function maybeAutoPlace() {
+  if (placed || !worldReady || !heroReady) return;
+  placed = true;
+  if (Q.get("noauto") === "1") { applyHero(); syncSliders(); statusEl.textContent = "manual mode"; }
+  else autoPlace();
+}
+
+new OBJLoader().load(heroUrl, obj => {
+  // Normalize: center X/Z, feet (min Y) at the group origin so 'height' rests it on a floor.
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  obj.position.set(-ctr.x, -box.min.y, -ctr.z);
+  obj.traverse(c => {
+    if (c.isMesh) {
+      const hasColor = !!c.geometry.getAttribute("color");
+      c.material = new THREE.MeshBasicMaterial({
+        vertexColors: hasColor, color: hasColor ? 0xffffff : 0xc8b89a, side: THREE.DoubleSide,
+      });
+    }
+  });
+  hero.fit = 2.0 / (size.y || 1);   // normalize to ~2 units; hero.scale then sets metric height
+  heroGroup.add(obj); applyHero();
+  heroPanel.classList.remove("hidden");
+  heroReady = true; maybeAutoPlace();
+}, undefined, err => console.warn("hero load failed (set ?hero=<url> or ignore):", err));
+
+const bindHero = (id, key) => {
+  const el = document.getElementById(id);
+  el.addEventListener("input", () => { hero[key] = parseFloat(el.value); applyHero(); syncSliders(); });
+};
+["h-scale,scale", "h-z,z", "h-x,x", "h-y,y", "h-rot,rot"].forEach(s => bindHero(...s.split(",")));
+document.getElementById("h-auto").addEventListener("click", autoPlace);
+document.getElementById("h-front").addEventListener("click", () => {
+  const f = fwd.clone(); f.y = 0; f.normalize();
+  hero.x = camera.position.x + f.x * 4;
+  hero.z = camera.position.z + f.z * 4;
+  hero.rot = Math.atan2(-f.x, -f.z) * 180 / Math.PI;   // face the camera
+  applyHero(); syncSliders();
+});
+document.getElementById("h-copy").addEventListener("click", () => {
+  const u = location.origin + location.pathname
+    + `?hx=${hero.x.toFixed(2)}&hy=${hero.y.toFixed(2)}&hz=${hero.z.toFixed(2)}`
+    + `&hs=${hero.scale.toFixed(2)}&hr=${hero.rot.toFixed(0)}`;
+  navigator.clipboard?.writeText(u);
+  const b = document.getElementById("h-copy"); b.textContent = "copied!";
+  setTimeout(() => b.textContent = "copy placement URL", 1200);
+});
+
+// --- First-person explore (desktop: drag+WASD+wheel; touch: drag+joystick+pinch) ---
+// Start facing the scene front (−Z, yaw=π), pitched slightly down so the auto-placed
+// figure on the ground is framed on load.
+let yaw = Math.PI, pitch = -0.15, pinch = 0;
+const keys = {}, move = { x: 0, y: 0 };
+// A HunyuanWorld scene is a panoramic depth shell: a huge sky sphere (worldRadius)
+// wrapping a thin foreground slab. Movement must track the *scene*, not the sky, or
+// one key-press flings you out the back. Use a small fraction of worldRadius.
+let speed = 0.0025;
+
+// Look / pinch via unified Pointer Events on the canvas. One active pointer rotates
+// the view; two pointers pinch to dolly forward/back. (The joystick captures its own
+// pointer separately, so its touches never reach here.)
+const pointers = new Map();
+const cvs = renderer.domElement;
+cvs.addEventListener("pointerdown", e => pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }));
+addEventListener("pointermove", e => {
+  if (!pointers.has(e.pointerId)) return;
+  if (pointers.size >= 2) {
+    const a = [...pointers.values()];
+    const old = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const b = [...pointers.values()];
+    const now = Math.hypot(b[0].x - b[1].x, b[0].y - b[1].y);
+    pinch += (now - old);                       // pinch out -> move forward
+  } else {
+    const p = pointers.get(e.pointerId);
+    yaw -= (e.clientX - p.x) * 0.0035;
+    pitch -= (e.clientY - p.y) * 0.0035;
+    pitch = Math.max(-1.5, Math.min(1.5, pitch));
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  }
+});
+const dropPointer = e => pointers.delete(e.pointerId);
+addEventListener("pointerup", dropPointer);
+addEventListener("pointercancel", dropPointer);
+
+// On-screen joystick (shown on touch devices; also works with a mouse).
+const stick = document.getElementById("stick"), knob = document.getElementById("knob");
+const STICK_R = 40;
+let stickId = null;
+const setKnob = (dx, dy) => { knob.style.transform = `translate(${dx}px,${dy}px)`; };
+stick.addEventListener("pointerdown", e => {
+  e.preventDefault(); stickId = e.pointerId; stick.setPointerCapture(e.pointerId);
+});
+stick.addEventListener("pointermove", e => {
+  if (e.pointerId !== stickId) return;
+  const r = stick.getBoundingClientRect();
+  let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const len = Math.hypot(dx, dy) || 1, cl = Math.min(len, STICK_R);
+  dx = dx / len * cl; dy = dy / len * cl;
+  setKnob(dx, dy); move.x = dx / STICK_R; move.y = dy / STICK_R;
+});
+const stickEnd = e => { if (e.pointerId === stickId) { stickId = null; move.x = move.y = 0; setKnob(0, 0); } };
+stick.addEventListener("pointerup", stickEnd);
+stick.addEventListener("pointercancel", stickEnd);
+
+if (matchMedia("(pointer: coarse)").matches || "ontouchstart" in window) {
+  document.body.classList.add("is-touch");
+  stick.classList.remove("hidden");
+}
+
+addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+cvs.addEventListener("wheel", e => {
+  e.preventDefault(); speed *= e.deltaY > 0 ? 0.9 : 1.1;
+  speed = Math.max(0.0004, Math.min(0.05, speed));
+}, { passive: false });
+
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
+(function animate() {
+  requestAnimationFrame(animate);
+  fwd.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+  right.crossVectors(fwd, up).normalize();
+  const step = speed * worldRadius * (keys["shift"] ? 3 : 1);
+  if (keys["w"]) camera.position.addScaledVector(fwd, step);
+  if (keys["s"]) camera.position.addScaledVector(fwd, -step);
+  if (keys["d"]) camera.position.addScaledVector(right, step);
+  if (keys["a"]) camera.position.addScaledVector(right, -step);
+  if (keys["e"]) camera.position.y += step;
+  if (keys["q"]) camera.position.y -= step;
+  if (move.x || move.y) {                        // joystick: up = forward
+    camera.position.addScaledVector(fwd, -move.y * step);
+    camera.position.addScaledVector(right, move.x * step);
+  }
+  if (pinch) { camera.position.addScaledVector(fwd, pinch * worldRadius * 0.0015); pinch = 0; }
+  camera.lookAt(camera.position.clone().add(fwd));
+  renderer.render(scene, camera);
+})();
+</script>
+</body>
+</html>
