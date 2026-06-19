@@ -98,7 +98,7 @@ image = (
     # protect numpy 1.24), add the np alias it lacks, and verify both funcs at build.
     .run_commands(
         "pip install --force-reinstall --no-deps "
-        "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8 && "
+        "git+https://github.com/EasternJournalist/utils3d.git@d3a577acf0a9ad7e513a1416449a07b6f47d967f && "
         "python -c \"import utils3d, os; "
         "open(os.path.join(os.path.dirname(utils3d.__file__), '__init__.py'), 'a').write('\\nfrom utils3d import numpy as np\\n')\" && "
         "python -c \"import utils3d; "
