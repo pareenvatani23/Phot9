@@ -144,6 +144,11 @@ def generate(image_bytes: bytes, hf_token: str,
     if "def create_icosahedron_mesh" not in open(np_init).read():
         open(np_init, "a").write(textwrap.dedent('''
             import numpy as _np
+            def uv_map(size, *args, **kwargs):
+                # MoGe's new-API name for image_uv; delegate to keep identical geometry.
+                import utils3d.numpy as _m
+                h, w = int(size[0]), int(size[1])
+                return _m.image_uv(width=w, height=h)
             def create_icosahedron_mesh():
                 A = (1 + 5 ** 0.5) / 2
                 vertices = _np.array([
