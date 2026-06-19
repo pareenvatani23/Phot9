@@ -25,7 +25,7 @@ on:
       hero_url:
         description: "hero .obj"
         required: false
-        default: "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/hero.obj"
+        default: "https://raw.githack.com/pareenvatani23/Phot9/ci-pshuman/out/result_clr_scale4_hiker_rmbg.obj"
       init:
         description: "initial transform: x,y,z,yaw_deg,scale"
         required: false

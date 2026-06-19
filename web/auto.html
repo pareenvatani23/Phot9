@@ -208,7 +208,7 @@ loader.load(GROUND_URL, g => {
 // ?hero=<url> overrides the mesh; ?hx/hy/hz/hs/hr override the solved transform;
 // ?height=<m> sets the target height; ?noauto=1 disables the auto solve.
 const Q = new URLSearchParams(location.search);
-const DEFAULT_HERO = "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/hero.obj";
+const DEFAULT_HERO = "https://raw.githack.com/pareenvatani23/Phot9/ci-pshuman/out/result_clr_scale4_hiker_rmbg.obj";
 const heroUrl = Q.get("hero") || DEFAULT_HERO;
 const TARGET_H = parseFloat(Q.get("height") || "1.7");   // meters; world is MoGe-metric
 const heroGroup = new THREE.Group(); scene.add(heroGroup);

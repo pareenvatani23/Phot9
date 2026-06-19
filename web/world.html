@@ -174,7 +174,7 @@ loader.load(modelUrl,
 // HunyuanWorld bakes a smeared person into the world; we drop a clean PSHuman
 // reconstruction on top. Auto-aligning into a panoramic depth shell is unreliable,
 // so placement is interactive (the panel, top-right). ?hero=<url> overrides.
-const DEFAULT_HERO = "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/hero.obj";
+const DEFAULT_HERO = "https://raw.githack.com/pareenvatani23/Phot9/ci-pshuman/out/result_clr_scale4_hiker_rmbg.obj";
 const heroUrl = new URLSearchParams(location.search).get("hero") || DEFAULT_HERO;
 const heroGroup = new THREE.Group(); scene.add(heroGroup);
 const heroPanel = document.getElementById("hero-ui");
