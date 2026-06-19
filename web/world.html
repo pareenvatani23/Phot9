@@ -110,23 +110,31 @@ function ingestFiles(files) {
 }
 
 fileEl.addEventListener("change", e => ingestFiles(e.target.files));
-["dragenter", "dragover"].forEach(ev => dropEl.addEventListener(ev, e => {
-  e.preventDefault(); dropEl.classList.add("drag");
+// Drop files anywhere in the window (the drop card hides once a world loads).
+["dragenter", "dragover"].forEach(ev => addEventListener(ev, e => {
+  e.preventDefault(); if (!dropEl.classList.contains("hidden")) dropEl.classList.add("drag");
 }));
-["dragleave", "drop"].forEach(ev => dropEl.addEventListener(ev, e => {
+["dragleave", "drop"].forEach(ev => addEventListener(ev, e => {
   e.preventDefault(); dropEl.classList.remove("drag");
 }));
-dropEl.addEventListener("drop", e => ingestFiles(e.dataTransfer.files));
+addEventListener("drop", e => ingestFiles(e.dataTransfer.files));
 
-// Optional hosted single mesh via ?model=
-const modelUrl = new URLSearchParams(location.search).get("model");
-if (modelUrl) {
-  dropEl.classList.add("hidden");
-  statusEl.textContent = "loading…";
-  loader.load(modelUrl, g => { camera.position.set(0, 0, 0); addGeometry(g, modelUrl); },
-    e => { if (e.total) statusEl.textContent = `loading… ${(100*e.loaded/e.total)|0}%`; },
-    err => { statusEl.textContent = "failed to load model"; console.error(err); });
-}
+// Auto-load the latest published world (the merged, decimated preview mesh) so the
+// page is a single zero-download link. ?model=<url> overrides; on failure we fall
+// back to the drop card so local .ply files still work.
+const DEFAULT_WORLD =
+  "https://raw.githack.com/pareenvatani23/Phot9/ci-world/out/world_merged.ply";
+const modelUrl = new URLSearchParams(location.search).get("model") || DEFAULT_WORLD;
+dropEl.classList.add("hidden");
+statusEl.textContent = "loading world…";
+loader.load(modelUrl,
+  g => { camera.position.set(0, 0, 0); addGeometry(g, modelUrl); },
+  e => { if (e.total) statusEl.textContent = `loading world… ${(100*e.loaded/e.total)|0}%`; },
+  err => {
+    console.error(err);
+    dropEl.classList.remove("hidden");
+    statusEl.textContent = "no published world yet — drop your .ply files";
+  });
 
 // --- First-person explore: drag to look, WASD to move ---
 let yaw = 0, pitch = 0, dragging = false, px = 0, py = 0;

@@ -59,13 +59,15 @@ jobs:
           name: hunyuanworld-mesh
           path: out/
           if-no-files-found: warn
-      - name: Publish to ci-world
-        continue-on-error: true  # meshes can exceed git push limits; artifact is the deliverable
+      - name: Publish preview world to ci-world
+        continue-on-error: true  # full layers stay in the artifact; only the slim merged mesh is published
         run: |
-          test -d out && [ -n "$(ls -A out 2>/dev/null)" ] || { echo "no outputs"; exit 0; }
+          test -f out/world_merged.ply || { echo "no merged mesh to publish"; exit 0; }
+          ls -la out/world_merged.ply
           git config user.name "ci"; git config user.email "ci@local"
           git checkout --orphan ci-world
           git rm -rf --cached . >/dev/null 2>&1 || true
-          git add -f out
-          git commit -q -m "HunyuanWorld $(date -u +%FT%TZ)"
+          # Publish the slim merged mesh + the viewer so one ci-world URL serves both.
+          git add -f out/world_merged.ply web/world.html
+          git commit -q -m "HunyuanWorld preview $(date -u +%FT%TZ)"
           git push -f origin ci-world

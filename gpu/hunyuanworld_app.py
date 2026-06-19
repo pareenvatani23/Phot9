@@ -197,6 +197,32 @@ def generate(image_bytes: bytes, hf_token: str,
 
     plys = sorted(glob.glob(os.path.join(out, "**", "*.ply"), recursive=True))
     print("HUNYUAN_OUTPUTS:", plys)
+
+    # Bake one small, merged mesh for an instant zero-download web preview
+    # (world.html?model=). These RGBD layers carry per-vertex colors, which
+    # open3d's quadric decimation preserves; trimesh/open3d are already baked in.
+    try:
+        import open3d as o3d
+        merged = o3d.geometry.TriangleMesh()
+        for p in plys:
+            m = o3d.io.read_triangle_mesh(p)
+            if len(m.triangles):
+                merged += m
+        if len(merged.triangles):
+            TARGET = 400_000
+            if len(merged.triangles) > TARGET:
+                merged = merged.simplify_quadric_decimation(TARGET)
+            merged.remove_duplicated_vertices()
+            mp = os.path.join(out, "world_merged.ply")
+            o3d.io.write_triangle_mesh(mp, merged, write_ascii=False)
+            plys.append(mp)
+            print("WORLD_MERGED:", mp, os.path.getsize(mp), "bytes",
+                  "tris", len(merged.triangles))
+        else:
+            print("merge skipped: no triangle meshes among outputs")
+    except Exception as e:
+        print("merge/export failed:", repr(e))
+
     return {os.path.basename(p): base64.b64encode(open(p, "rb").read()).decode() for p in plys}
 
 
