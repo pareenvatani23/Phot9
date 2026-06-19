@@ -86,10 +86,11 @@ image = (
         "echo SHIM_OK"
     )
     # Small utility deps the conda env pulls that aren't in the core wheels above.
+    # peft is required for the FLUX LoRA adapters HunyuanWorld loads.
     .pip_install(
         "easydict", "scipy", "scikit-image", "imageio", "imageio-ffmpeg",
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
-        "open_clip_torch", "ftfy", "rembg", "pymeshlab",
+        "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
 )
 
