@@ -92,13 +92,15 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
-    # HunyuanWorld/MoGe need utils3d at this exact commit (has utils3d.numpy.image_uv);
-    # a transitive install pulled an incompatible version. Force-reinstall the pin
-    # (plain pip install skipped it as "already satisfied") and verify at build time.
+    # HunyuanWorld calls utils3d.numpy.image_uv. Force-reinstall MoGe's pin (with deps)
+    # and print what utils3d.numpy actually exposes so we can confirm the attribute.
     .run_commands(
-        "pip install --force-reinstall --no-deps "
+        "pip install --force-reinstall "
         "git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183 && "
-        "python -c 'import utils3d; print(\"IMAGE_UV_OK\", utils3d.numpy.image_uv)'"
+        "python -c 'import utils3d, utils3d.numpy as n; "
+        "print(\"UVATTRS\", sorted([x for x in dir(n) if \"uv\" in x.lower()])); "
+        "print(\"NDIR\", sorted(dir(n))); "
+        "assert hasattr(n, \"image_uv\"), \"NO_IMAGE_UV\"'"
     )
 )
 
