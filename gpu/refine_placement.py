@@ -35,6 +35,9 @@ image = (
     .pip_install("torch==2.5.0", "torchvision==0.20.0",
                  index_url="https://download.pytorch.org/whl/cu124")
     .pip_install("numpy==1.24.1", "pillow", "trimesh")
+    # build deps for pytorch3d's --no-build-isolation source build (else the
+    # legacy setup.py path dies with "invalid command 'bdist_wheel'").
+    .pip_install("setuptools", "wheel", "ninja")
     .run_commands("pip install --no-build-isolation "
                   "'git+https://github.com/facebookresearch/pytorch3d.git'")
 )

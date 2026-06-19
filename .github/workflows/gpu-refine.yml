@@ -42,7 +42,7 @@ jobs:
   refine:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       MODAL_TOKEN_ID: ${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}
