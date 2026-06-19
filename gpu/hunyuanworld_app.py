@@ -92,13 +92,18 @@ image = (
         "matplotlib", "plyfile", "py360convert", "sentencepiece",
         "open_clip_torch", "ftfy", "rembg", "pymeshlab", "peft", "protobuf",
     )
-    # HunyuanWorld calls utils3d.numpy.image_uv — the pre-rewrite flat API. MoGe's pin
-    # (utils3d 1.3) removed it and pulls numpy 2.x. Install the older flat-API commit
-    # with --no-deps (protects numpy 1.24) and verify image_uv exists at build time.
+    # HunyuanWorld uses the pre-rewrite flat utils3d API (utils3d.numpy.image_uv and
+    # the utils3d.np alias with create_icosahedron_mesh). MoGe's transitive pin (1.3)
+    # removed all of it and pulls numpy 2.x. Install the flat-API commit (--no-deps to
+    # protect numpy 1.24), add the np alias it lacks, and verify both funcs at build.
     .run_commands(
         "pip install --force-reinstall --no-deps "
         "git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8 && "
-        "python -c 'import utils3d; print(\"IMAGE_UV_OK\", utils3d.numpy.image_uv)'"
+        "python -c \"import utils3d, os; "
+        "open(os.path.join(os.path.dirname(utils3d.__file__), '__init__.py'), 'a').write('\\nfrom utils3d import numpy as np\\n')\" && "
+        "python -c \"import utils3d; "
+        "print('IMG', hasattr(utils3d.numpy, 'image_uv'), 'ICO', hasattr(utils3d.numpy, 'create_icosahedron_mesh')); "
+        "print('NPALIAS_OK', utils3d.np.create_icosahedron_mesh)\""
     )
 )
 
