@@ -15,10 +15,18 @@ on:
       modal_token_secret:
         description: "Modal token secret (as-...). Leave blank to use the MODAL_TOKEN_SECRET repo secret."
         required: false
+      mode:
+        description: "album (generate clips + stitch) or restitch (re-stitch existing clips, CPU-only)"
+        required: false
+        default: "album"
       images_dir:
-        description: "directory of photos in the repo"
+        description: "directory of photos in the repo (album mode)"
         required: false
         default: "demo/album"
+      clips_dir:
+        description: "directory of existing clips (restitch mode)"
+        required: false
+        default: "demo/album_clips"
       title:
         description: "album title card text"
         required: false
@@ -49,9 +57,15 @@ jobs:
         run: pip install -r gpu/requirements.txt
       - name: Build album
         run: |
-          modal run gpu/worldplay_app.py::run_album \
-            --images-dir "${{ inputs.images_dir }}" \
-            --title "${{ inputs.title }}"
+          if [ "${{ inputs.mode }}" = "restitch" ]; then
+            modal run gpu/worldplay_app.py::restitch \
+              --clips-dir "${{ inputs.clips_dir }}" \
+              --title "${{ inputs.title }}"
+          else
+            modal run gpu/worldplay_app.py::run_album \
+              --images-dir "${{ inputs.images_dir }}" \
+              --title "${{ inputs.title }}"
+          fi
           ls -la out || true
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -66,6 +80,7 @@ jobs:
           git config user.name "ci"; git config user.email "ci@local"
           git checkout --orphan ci-album
           git rm -rf --cached . >/dev/null 2>&1 || true
-          git add -f out/album.mp4 out/clip_*.mp4 web/play.html
+          git add -f out/album.mp4 web/play.html
+          git add -f out/clip_*.mp4 2>/dev/null || true
           git commit -q -m "WorldPlay album $(date -u +%FT%TZ)"
           git push -f origin ci-album

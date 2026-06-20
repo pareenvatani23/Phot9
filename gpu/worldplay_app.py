@@ -146,6 +146,50 @@ def _prep_image_to_16x9(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _build_trajectory(pose, video_length):
+    """Named camera presets -> a custom-trajectory JSON path. Returns None for raw
+    pose strings ('w-31'), which pass through to generate.py unchanged.
+
+    The album defaults use SMALL-amplitude moves that stay near the original
+    viewpoint, so the model reveals little new content and barely hallucinates —
+    a "living photo" feel rather than a fly-through:
+      push     – gentle dolly-in (most faithful: moves *into* the existing scene)
+      parallax – gentle lateral truck (depth parallax, minimal reveal)
+      gentle   – tiny push + a slight lateral sway that eases back toward origin
+      orbit360 – full 360 fly-around (kept, but heavy hallucination; not a default)
+    """
+    presets = {"orbit360", "push", "parallax", "gentle"}
+    if pose not in presets:
+        return None
+    import json
+    import os
+    import sys
+    import numpy as np
+    sys.path.insert(0, WORKDIR)
+    from hyvideo.generate_custom_trajectory import generate_camera_trajectory_local
+    steps = (video_length - 1) // 4          # poses = steps + 1 = latent count
+    if pose == "orbit360":
+        motions = [{"third_yaw": 2 * np.pi / steps} for _ in range(steps)]
+    elif pose == "push":
+        motions = [{"forward": 0.012} for _ in range(steps)]
+    elif pose == "parallax":
+        motions = [{"right": 0.010} for _ in range(steps)]
+    else:  # gentle
+        motions = [{"forward": 0.006,
+                    "right": 0.012 * float(np.cos(np.pi * i / max(steps - 1, 1)))}
+                   for i in range(steps)]
+    poses = generate_camera_trajectory_local(motions)
+    K = [[969.6969696969696, 0.0, 960.0],
+         [0.0, 969.6969696969696, 540.0],
+         [0.0, 0.0, 1.0]]
+    custom = {str(i): {"extrinsic": p.tolist(), "K": K} for i, p in enumerate(poses)}
+    os.makedirs(os.path.join(WORKDIR, "assets", "pose"), exist_ok=True)
+    path = os.path.join(WORKDIR, "assets", "pose", f"{pose}.json")
+    json.dump(custom, open(path, "w"))
+    print(f"trajectory '{pose}': {len(poses)} poses -> {path}")
+    return path
+
+
 def _generate_impl(image_bytes, model_path, ar_distill, prompt, pose,
                    video_length, seed, enable_sr) -> dict:
     """Shared body: preprocess -> distilled AR rollout (4 steps) -> mp4(s)."""
@@ -173,25 +217,7 @@ def _generate_impl(image_bytes, model_path, ar_distill, prompt, pose,
     # .json path, or the "orbit360" preset -> a closed-loop 360° orbit (third_yaw)
     # built with the repo's own trajectory generator. A full 360 returns the camera
     # exactly to the start pose, so the last frame reframes the opening photo.
-    pose_arg = pose
-    if pose.startswith("orbit"):
-        import json
-        import numpy as np
-        import sys as _sys
-        _sys.path.insert(0, WORKDIR)
-        from hyvideo.generate_custom_trajectory import generate_camera_trajectory_local
-        latents = (video_length - 1) // 4 + 1           # poses needed (incl. frame 0)
-        steps = latents - 1
-        motions = [{"third_yaw": 2 * np.pi / steps} for _ in range(steps)]
-        poses = generate_camera_trajectory_local(motions)
-        K = [[969.6969696969696, 0.0, 960.0],
-             [0.0, 969.6969696969696, 540.0],
-             [0.0, 0.0, 1.0]]                            # repo's reference intrinsic
-        custom = {str(i): {"extrinsic": p.tolist(), "K": K} for i, p in enumerate(poses)}
-        os.makedirs(os.path.join(WORKDIR, "assets", "pose"), exist_ok=True)
-        pose_arg = os.path.join(WORKDIR, "assets", "pose", "orbit360.json")
-        json.dump(custom, open(pose_arg, "w"))
-        print(f"orbit360: {len(poses)} poses, {np.degrees(2*np.pi/steps):.1f}°/latent -> {pose_arg}")
+    pose_arg = _build_trajectory(pose, video_length) or pose
 
     cmd = [
         "torchrun", "--nproc_per_node=1", "--master_port=29517",
@@ -259,14 +285,29 @@ def generate_draft(image_bytes: bytes, model_path: str, ar_distill: str,
 
 
 @app.function(image=image, timeout=1200)
-def stitch(clips: list, captions=None, title=None, fps: int = 24) -> str:
-    """Concatenate the per-photo clips into one album montage (ffmpeg). Burns an
-    optional title card + per-clip captions; falls back to a plain hard-cut concat if
-    the captioned path fails for any reason, so an album always renders."""
+def stitch(clips: list, captions=None, title=None, fps: int = 24,
+           music: bool = True, xfade: float = 0.6) -> str:
+    """Stitch the per-photo clips into one album montage with a title card, optional
+    per-clip captions, gentle crossfades, and a soft music bed. Probes the clips' real
+    dimensions (so the title/captions match) and degrades gracefully: crossfade ->
+    hard-cut concat -> raw copy, and music is best-effort (silent if it fails)."""
     import base64
+    import json
     import os
     import subprocess
     import tempfile
+
+    def run(args):
+        return subprocess.run(args, check=True, capture_output=True)
+
+    def probe(path):
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-show_entries", "format=duration",
+             "-of", "json", path], capture_output=True, text=True, check=True)
+        j = json.loads(r.stdout)
+        s = j["streams"][0]
+        return int(s["width"]), int(s["height"]), float(j["format"]["duration"])
 
     d = tempfile.mkdtemp()
     paths = []
@@ -274,52 +315,78 @@ def stitch(clips: list, captions=None, title=None, fps: int = 24) -> str:
         p = os.path.join(d, f"c{i:02d}.mp4")
         open(p, "wb").write(base64.b64decode(c) if isinstance(c, str) else c)
         paths.append(p)
-    W, H = 832, 480
+
+    W, H, _ = probe(paths[0])                 # real clip dims (e.g. 848x480)
     font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     have_font = os.path.exists(font)
-    out = os.path.join(d, "album.mp4")
     caps = captions or [None] * len(paths)
+    out = os.path.join(d, "album.mp4")
+    assembled = os.path.join(d, "v.mp4")
 
     def esc(t):
         return t.replace("\\", "").replace(":", "\\:").replace("'", "")
 
+    # 1) Normalize every segment to identical W,H,fps,SAR,pix_fmt so xfade/concat work.
+    norm = "scale=%d:%d,setsar=1,format=yuv420p" % (W, H)
+    seq, durs = [], []
+    title_dur = 2.0
+    if title and have_font:
+        tp = os.path.join(d, "title.mp4")
+        run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:d={title_dur}:r={fps}",
+             "-vf", (f"{norm},drawtext=fontfile={font}:text='{esc(title)}':fontcolor=white:"
+                     f"fontsize={int(H*0.09)}:x=(w-tw)/2:y=(h-th)/2:"
+                     f"alpha='min(1,min(t/0.5,(%g-t)/0.5))'" % title_dur),
+             "-an", tp])
+        seq.append(tp); durs.append(title_dur)
+    for i, p in enumerate(paths):
+        lp = os.path.join(d, f"l{i:02d}.mp4")
+        vf = [norm]
+        if caps[i] and have_font:
+            vf.append(f"drawtext=fontfile={font}:text='{esc(caps[i])}':fontcolor=white:"
+                      f"fontsize={int(H*0.055)}:box=1:boxcolor=black@0.4:boxborderw=10:"
+                      f"x=(w-tw)/2:y=h-th-{int(H*0.06)}")
+        run(["ffmpeg", "-y", "-i", p, "-vf", ",".join(vf), "-r", str(fps), "-an", lp])
+        seq.append(lp); durs.append(probe(p)[2])
+
+    # 2) Assemble: crossfade chain -> hard-cut concat fallback.
     try:
-        seq = []
-        if title and have_font:
-            tp = os.path.join(d, "title.mp4")
-            subprocess.run(
-                ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s={W}x{H}:d=1.8:r={fps}",
-                 "-vf", (f"drawtext=fontfile={font}:text='{esc(title)}':fontcolor=white:"
-                         f"fontsize=44:x=(w-tw)/2:y=(h-th)/2,fade=t=in:st=0:d=0.4,"
-                         f"fade=t=out:st=1.4:d=0.4"),
-                 "-pix_fmt", "yuv420p", "-an", tp], check=True, capture_output=True)
-            seq.append(tp)
-        for i, p in enumerate(paths):
-            lp = os.path.join(d, f"l{i:02d}.mp4")
-            vf = []
-            if caps[i] and have_font:
-                vf.append(f"drawtext=fontfile={font}:text='{esc(caps[i])}':fontcolor=white:"
-                          f"fontsize=26:box=1:boxcolor=black@0.45:boxborderw=10:"
-                          f"x=(w-tw)/2:y=h-th-28")
-            vf.append("fade=t=in:st=0:d=0.3")
-            subprocess.run(["ffmpeg", "-y", "-i", p, "-vf", ",".join(vf), "-r", str(fps),
-                            "-pix_fmt", "yuv420p", "-an", lp], check=True, capture_output=True)
-            seq.append(lp)
         inputs = []
         for s in seq:
             inputs += ["-i", s]
-        n = len(seq)
-        fc = "".join(f"[{i}:v]" for i in range(n)) + f"concat=n={n}:v=1:a=0[out]"
-        subprocess.run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[out]",
-                        "-r", str(fps), "-pix_fmt", "yuv420p", out], check=True, capture_output=True)
+        prev, acc, filt = "[0:v]", durs[0], ""
+        for i in range(1, len(seq)):
+            off = max(acc - xfade, 0.05)
+            filt += f"{prev}[{i}:v]xfade=transition=fade:duration={xfade}:offset={off:.3f}[x{i}];"
+            prev = f"[x{i}]"; acc = acc + durs[i] - xfade
+        run(["ffmpeg", "-y", *inputs, "-filter_complex", filt.rstrip(";"),
+             "-map", prev, "-r", str(fps), "-pix_fmt", "yuv420p", assembled])
     except subprocess.CalledProcessError as e:
-        print("captioned stitch failed -> plain concat. stderr:",
-              (e.stderr or b"")[-1500:].decode("utf-8", "ignore"))
-        listf = os.path.join(d, "list.txt")
-        open(listf, "w").write("".join(f"file '{p}'\n" for p in paths))
-        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listf,
-                        "-c", "copy", out], check=True)
-    print(f"album: {os.path.getsize(out)} bytes from {len(paths)} clips")
+        print("xfade failed -> hard-cut concat:", (e.stderr or b"")[-800:].decode("utf-8", "ignore"))
+        inputs = []
+        for s in seq:
+            inputs += ["-i", s]
+        fc = "".join(f"[{i}:v]" for i in range(len(seq))) + f"concat=n={len(seq)}:v=1:a=0[o]"
+        run(["ffmpeg", "-y", *inputs, "-filter_complex", fc, "-map", "[o]",
+             "-r", str(fps), "-pix_fmt", "yuv420p", assembled])
+
+    # 3) Soft warm chord pad (best-effort; silent montage if it fails).
+    if music:
+        try:
+            D = probe(assembled)[2]
+            chord = "0.10*sin(2*PI*130.81*t)+0.08*sin(2*PI*164.81*t)+0.06*sin(2*PI*196.0*t)"
+            mus = os.path.join(d, "mus.wav")
+            run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"aevalsrc={chord}:s=44100:d={D:.2f}",
+                 "-af", (f"lowpass=f=2200,afade=t=in:st=0:d=1.2,"
+                         f"afade=t=out:st={max(D-1.8,0):.2f}:d=1.8,volume=0.7"), mus])
+            run(["ffmpeg", "-y", "-i", assembled, "-i", mus, "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest", out])
+        except subprocess.CalledProcessError as e:
+            print("music mux failed -> silent montage:", (e.stderr or b"")[-800:].decode("utf-8", "ignore"))
+            out = assembled
+    else:
+        out = assembled
+
+    print(f"album: {os.path.getsize(out)} bytes, {W}x{H}, {len(paths)} clips, music={music}")
     return base64.b64encode(open(out, "rb").read()).decode()
 
 
@@ -359,10 +426,12 @@ def run_demo(image: str = "demo/hiker.jpg",
         print(f"wrote {path} ({os.path.getsize(path)} bytes)")
 
 
-# Auto camera move per photo (heuristic v1; VLM-driven in the product): orbit wide
-# table/scene shots to show the space, dolly into portraits/close subjects.
-_PORTRAIT_MOVE = "w-31"      # gentle dolly-in
-_SCENE_MOVE = "orbit360"     # closed-loop fly-around
+# Gentle, faithful camera moves (small amplitude -> minimal hallucination). We avoid
+# the 360 orbit for albums because it forces the model to invent the whole room. We
+# alternate a slow push-in and a lateral parallax for variety; both stay near the
+# original frame so the photo reads as a "living memory", not a fly-through.
+_MOVE_A = "push"        # slow dolly-in
+_MOVE_B = "parallax"    # gentle lateral parallax
 
 
 @app.local_entrypoint()
@@ -390,7 +459,7 @@ def run_album(images_dir: str = "demo/album", title: str = "Memory Album",
     # Fan out: spawn one draft (A100, 480p) job per photo; they run in parallel.
     jobs = []
     for i, p in enumerate(paths):
-        pose = _SCENE_MOVE if i % 2 == 0 else _PORTRAIT_MOVE  # alternate for variety
+        pose = _MOVE_A if i % 2 == 0 else _MOVE_B  # alternate gentle moves for variety
         data = open(p, "rb").read()
         fc = generate_draft.spawn(data, model_path, ar_distill, prompt, pose, 125, seed)
         jobs.append((p, pose, fc))
@@ -415,3 +484,23 @@ def run_album(images_dir: str = "demo/album", title: str = "Memory Album",
     album_b64 = stitch.remote([base64.b64encode(c).decode() for c in clips], None, title)
     open(os.path.join("out", "album.mp4"), "wb").write(base64.b64decode(album_b64))
     print(f"wrote out/album.mp4 from {len(clips)} clips")
+
+
+@app.local_entrypoint()
+def restitch(clips_dir: str = "demo/album_clips", title: str = "The George on Collins",
+             music: bool = True) -> None:
+    """CPU-only: re-stitch already-generated clips (title + crossfades + music) without
+    re-spending GPU. Iterate the montage/music here cheaply."""
+    import base64
+    import glob
+    import os
+
+    paths = sorted(glob.glob(os.path.join(clips_dir, "*.mp4")))
+    if not paths:
+        raise SystemExit(f"no .mp4 clips in {clips_dir}")
+    print(f"restitch: {len(paths)} clips from {clips_dir}")
+    clips = [base64.b64encode(open(p, "rb").read()).decode() for p in paths]
+    album_b64 = stitch.remote(clips, None, title, 24, music)
+    os.makedirs("out", exist_ok=True)
+    open(os.path.join("out", "album.mp4"), "wb").write(base64.b64decode(album_b64))
+    print(f"wrote out/album.mp4 ({os.path.getsize('out/album.mp4')} bytes)")
