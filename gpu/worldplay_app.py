@@ -90,6 +90,11 @@ def fetch_weights(hf_token: str) -> tuple[str, str]:
 
     dm.check_dependencies()
     hunyuan_path = dm.download_hunyuan_video()          # vae/scheduler/transformer 480p_i2v
+    # Super-resolution uses a *separate* SR transformer + upsampler (720p_sr_distilled)
+    # that download_models.py does not fetch. Pull them so --sr true works.
+    snapshot_download("tencent/HunyuanVideo-1.5",
+                      allow_patterns=["transformer/720p_sr_distilled/*",
+                                      "upsampler/720p_sr_distilled/*"])
     dm.download_llm_text_encoder(hunyuan_path)          # Qwen2.5-VL-7B -> text_encoder/llm
     dm.download_byt5_encoders(hunyuan_path)             # byt5-small + Glyph-SDXL-v2
     if hf_token:
@@ -230,14 +235,11 @@ def run_demo(image: str = "demo/hiker.jpg",
         result = generate.remote(data, model_path, ar_distill, prompt, pose,
                                  video_length, seed, True)
     except Exception as e:
-        # Auto-fallback: SR + a longer sequence can exceed 80 GB. Retry once at the
-        # proven 125-frame length so a clip still ships.
-        print(f"generate failed at video_length={video_length} ({type(e).__name__}: {e});"
-              f" retrying at 125 with SR…")
-        if video_length != 125:
-            result = generate.remote(data, model_path, ar_distill, prompt, pose, 125, seed, True)
-        else:
-            raise
+        # Auto-fallback to the proven-good config (125 frames, no SR) so a clip always
+        # ships, whether the primary failed on OOM (SR + long sequence) or SR itself.
+        print(f"generate failed at video_length={video_length}+SR ({type(e).__name__}: {e});"
+              f" retrying at 125 without SR…")
+        result = generate.remote(data, model_path, ar_distill, prompt, pose, 125, seed, False)
     os.makedirs("out", exist_ok=True)
     for name, b64 in result.items():
         path = os.path.join("out", name)
