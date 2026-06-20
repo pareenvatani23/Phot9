@@ -16,9 +16,9 @@ on:
         description: "Modal token secret (as-...). Leave blank to use the MODAL_TOKEN_SECRET repo secret."
         required: false
       mode:
-        description: "album (WorldPlay) | depthflow (1080p parallax) | df-test (single image) | restitch"
+        description: "i2v (Wan2.2 real motion) | i2v-test (single) | depthflow (1080p parallax) | df-test | album (WorldPlay) | restitch"
         required: false
-        default: "depthflow"
+        default: "i2v-test"
       images_dir:
         description: "directory of photos in the repo (album mode)"
         required: false
@@ -61,6 +61,11 @@ jobs:
             restitch)
               modal run gpu/worldplay_app.py::restitch \
                 --clips-dir "${{ inputs.clips_dir }}" --title "${{ inputs.title }}" ;;
+            i2v)
+              modal run gpu/worldplay_app.py::run_album_i2v \
+                --images-dir "${{ inputs.images_dir }}" --title "${{ inputs.title }}" ;;
+            i2v-test)
+              modal run gpu/worldplay_app.py::i2v_test ;;
             depthflow)
               modal run gpu/worldplay_app.py::run_album_df \
                 --images-dir "${{ inputs.images_dir }}" --title "${{ inputs.title }}" ;;
@@ -80,13 +85,14 @@ jobs:
       - name: Publish album to ci-album
         continue-on-error: true
         run: |
-          test -f out/album.mp4 || test -f out/df_test.mp4 || { echo "nothing to publish"; exit 0; }
+          test -f out/album.mp4 || test -f out/df_test.mp4 || test -f out/i2v_test.mp4 || { echo "nothing to publish"; exit 0; }
           git config user.name "ci"; git config user.email "ci@local"
           git checkout --orphan ci-album
           git rm -rf --cached . >/dev/null 2>&1 || true
           git add -f web/play.html
           git add -f out/album.mp4 2>/dev/null || true
           git add -f out/df_test.mp4 2>/dev/null || true
+          git add -f out/i2v_test.mp4 2>/dev/null || true
           git add -f out/clip_*.mp4 2>/dev/null || true
           git commit -q -m "WorldPlay album $(date -u +%FT%TZ)"
           git push -f origin ci-album

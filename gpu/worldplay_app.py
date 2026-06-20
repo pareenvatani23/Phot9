@@ -93,6 +93,126 @@ depthflow_image = (
 )
 
 
+# ── Wan 2.2 image-to-video: REAL generative motion (the "living photo" wow). The
+# subject actually MOVES — a subtle smile, a head shift, steam rising, a drink
+# fizzing — not just a camera parallax over a frozen still. Wan2.2-TI2V-5B is
+# 720p@24fps, text-promptable, and fits one A100. Faithfulness (no hallucinated
+# identities — the failure mode of the first WorldPlay attempt) comes from
+# low-amplitude prompting + a strong anti-morph negative prompt.
+wan_cache = modal.Volume.from_name("wan-cache", create_if_missing=True)
+WAN_MODEL = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+wan_image = (
+    modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11")
+    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0")
+    .env({"HF_HOME": "/wancache/hf", "HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    .pip_install("torch==2.6.0", "torchvision==0.21.0",
+                 index_url="https://download.pytorch.org/whl/cu124")
+    .pip_install(
+        # Wan 2.2 needs diffusers >= 0.35; UMT5 text encoder needs sentencepiece;
+        # export_to_video needs imageio-ffmpeg.
+        "diffusers>=0.35.1", "transformers>=4.49.0", "accelerate>=1.0.0",
+        "ftfy", "imageio", "imageio-ffmpeg", "sentencepiece", "protobuf",
+        "safetensors", "hf_transfer",
+    )
+)
+
+# Faithful, low-amplitude motion direction. Name the *specific* small motions we want
+# (smile, steam, fizz, flicker) so the model spends its motion budget there, and lean
+# hard on the negative prompt to stop face-morph / identity drift.
+_I2V_PROMPT = (
+    "subtle lifelike motion, the people gently smile and shift slightly, hair and "
+    "clothing barely move, soft steam rising, drinks fizzing gently, a candle flame "
+    "flickering, warm restaurant lighting, photorealistic, preserve identity, "
+    "static locked-off camera"
+)
+_I2V_NEG = (
+    "morphing face, distorted face, changing identity, deformed, extra limbs, extra "
+    "fingers, warping, melting, fast motion, exaggerated motion, camera shake, zoom, "
+    "pan, jitter, flicker, blurry, low quality, artifacts, text, watermark"
+)
+
+_WAN: dict = {}
+
+
+def _load_wan():
+    """Load Wan 2.2 once per (warm) container; cache on a module global."""
+    import torch
+    from diffusers import (AutoencoderKLWan, UniPCMultistepScheduler,
+                           WanImageToVideoPipeline)
+    if "pipe" not in _WAN:
+        # Wan VAE must stay fp32 (bf16 -> NaNs / black frames); transformer is bf16.
+        vae = AutoencoderKLWan.from_pretrained(WAN_MODEL, subfolder="vae",
+                                               torch_dtype=torch.float32)
+        pipe = WanImageToVideoPipeline.from_pretrained(WAN_MODEL, vae=vae,
+                                                       torch_dtype=torch.bfloat16)
+        pipe.scheduler = UniPCMultistepScheduler.from_config(
+            pipe.scheduler.config, flow_shift=5.0)   # 5.0 = 720p
+        pipe.to("cuda")
+        pipe.vae.enable_tiling()                     # avoid the known VAE OOM-at-decode
+        pipe.vae.enable_slicing()
+        _WAN["pipe"] = pipe
+    return _WAN["pipe"]
+
+
+@app.function(image=wan_image, timeout=3600, volumes={"/wancache": wan_cache})
+def wan_fetch() -> str:
+    """Pre-download Wan weights (~25 GB) to the volume once, so album fan-out doesn't
+    stampede N parallel downloads."""
+    import os
+    from huggingface_hub import snapshot_download
+    os.environ.setdefault("HF_HOME", "/wancache/hf")
+    p = snapshot_download(WAN_MODEL)
+    wan_cache.commit()
+    print("WAN_FETCH_OK", p)
+    return p
+
+
+@app.function(image=wan_image, gpu="A100-80GB", timeout=2400, scaledown_window=300,
+              volumes={"/wancache": wan_cache})
+def i2v_render(image_bytes: bytes, prompt: str = _I2V_PROMPT, negative: str = _I2V_NEG,
+               num_frames: int = 81, fps: int = 24, steps: int = 40, seed: int = 1) -> str:
+    """One photo -> a real generative-motion clip via Wan 2.2 (~720p). The subject
+    actually moves — a faithful 'living photo'. Weights (~25 GB) cache on the volume."""
+    import base64
+    import io
+    import os
+    import subprocess
+    import tempfile
+    import torch
+    from PIL import Image
+    from diffusers.utils import export_to_video
+
+    os.environ.setdefault("HF_HOME", "/wancache/hf")
+    wan_cache.reload()                               # see weights prefetched by wan_fetch
+    pipe = _load_wan()
+    wan_cache.commit()
+
+    im = Image.open(io.BytesIO(_prep_image_to_16x9(image_bytes))).convert("RGB")
+    # Snap dims to the model grid at ~720p (mismatched dims warp faces / OOM).
+    max_area = 704 * 1280
+    ar = im.height / im.width
+    ps = getattr(pipe.transformer.config, "patch_size", (1, 2, 2))
+    ps1 = ps[1] if isinstance(ps, (list, tuple)) else ps
+    mod = getattr(pipe, "vae_scale_factor_spatial", 16) * ps1
+    h = max(mod, int(round((max_area * ar) ** 0.5)) // mod * mod)
+    w = max(mod, int(round((max_area / ar) ** 0.5)) // mod * mod)
+    im = im.resize((w, h), Image.LANCZOS)
+
+    g = torch.Generator(device="cuda").manual_seed(seed)
+    frames = pipe(image=im, prompt=prompt, negative_prompt=negative,
+                  height=h, width=w, num_frames=num_frames, guidance_scale=5.0,
+                  num_inference_steps=steps, generator=g).frames[0]
+
+    d = tempfile.mkdtemp()
+    raw, out = os.path.join(d, "raw.mp4"), os.path.join(d, "out.mp4")
+    export_to_video(frames, raw, fps=fps)
+    # Normalize to browser-safe h264/yuv420p (export_to_video's codec varies).
+    subprocess.run(["ffmpeg", "-y", "-i", raw, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", out], check=True, capture_output=True)
+    print(f"i2v_render: {os.path.getsize(out)} bytes, {w}x{h}, {num_frames}f @ {fps}fps")
+    return base64.b64encode(open(out, "rb").read()).decode()
+
+
 def _have_siglip(hunyuan_path: str) -> bool:
     import os
     d = os.path.join(hunyuan_path, "vision_encoder", "siglip")
@@ -589,6 +709,62 @@ def df_test(image: str = "demo/album/03_pair.jpg", preset: str = "") -> None:
     os.makedirs("out", exist_ok=True)
     open("out/df_test.mp4", "wb").write(base64.b64decode(b64))
     print(f"wrote out/df_test.mp4 ({os.path.getsize('out/df_test.mp4')} bytes)")
+
+
+@app.local_entrypoint()
+def i2v_test(image: str = "demo/album/04_cheers.jpg", num_frames: int = 81,
+             seed: int = 1) -> None:
+    """Validate Wan 2.2 real-motion on a single photo (the toast shot — people + drinks
+    is where generative motion sings) before committing to a full album."""
+    import base64
+    import os
+    b64 = i2v_render.remote(open(image, "rb").read(), num_frames=num_frames, seed=seed)
+    os.makedirs("out", exist_ok=True)
+    open("out/i2v_test.mp4", "wb").write(base64.b64decode(b64))
+    print(f"wrote out/i2v_test.mp4 ({os.path.getsize('out/i2v_test.mp4')} bytes)")
+
+
+@app.local_entrypoint()
+def run_album_i2v(images_dir: str = "demo/album", title: str = "The George on Collins",
+                  num_frames: int = 81, seed: int = 1) -> None:
+    """Wan 2.2 memory album: each photo -> a real-motion clip (parallel) -> one stitched
+    montage with title + crossfades + music. The subjects actually come alive."""
+    import base64
+    import glob
+    import os
+
+    exts = (".jpg", ".jpeg", ".png", ".webp")
+    paths = sorted(p for p in glob.glob(os.path.join(images_dir, "*"))
+                   if p.lower().endswith(exts))
+    if not paths:
+        raise SystemExit(f"no images found in {images_dir}")
+    print(f"i2v album: {len(paths)} photos from {images_dir}")
+
+    wan_fetch.remote()                               # populate weights cache once
+    jobs = []
+    for p in paths:
+        fc = i2v_render.spawn(open(p, "rb").read(), _I2V_PROMPT, _I2V_NEG,
+                              num_frames, 24, 40, seed)
+        jobs.append((p, fc))
+
+    os.makedirs("out", exist_ok=True)
+    clips = []
+    for p, fc in jobs:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        try:
+            raw = base64.b64decode(fc.get())
+            open(os.path.join("out", f"clip_{stem}.mp4"), "wb").write(raw)
+            clips.append(raw)
+            print(f"  clip OK {stem} ({len(raw)} bytes)")
+        except Exception as e:
+            print(f"  clip FAILED for {p}: {type(e).__name__}: {e}")
+
+    if not clips:
+        raise SystemExit("no clips produced — cannot stitch album")
+    album = base64.b64decode(stitch.remote(
+        [base64.b64encode(c).decode() for c in clips], None, title))
+    open(os.path.join("out", "album.mp4"), "wb").write(album)
+    print(f"wrote out/album.mp4 from {len(clips)} clips (720p i2v)")
 
 
 @app.local_entrypoint()
