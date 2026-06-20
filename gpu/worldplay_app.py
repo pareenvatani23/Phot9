@@ -40,7 +40,8 @@ image = (
     .apt_install("git", "wget", "ffmpeg", "libgl1", "libglib2.0-0")
     .env({
         "HF_HOME": "/weights/hf",          # cache every snapshot on the volume
-        "HF_HUB_ENABLE_HF_TRANSFER": "0",
+        "HF_HUB_ENABLE_HF_TRANSFER": "1",  # parallel chunked downloads (the first run
+                                           # crawled at ~4 MB/s with this off)
         "PYTHONPATH": WORKDIR,
     })
     # torch 2.6 / cu124 first (matches the repo's torch>=2.6 / tv0.21 / ta2.6 pins),
@@ -67,9 +68,59 @@ def _have_siglip(hunyuan_path: str) -> bool:
     return os.path.isdir(d) and len(os.listdir(d)) > 3
 
 
-@app.function(image=image, gpu="A100-80GB", timeout=5400,
+# The downloads are the slow, GPU-irrelevant part (~40-50 GB from HF/ModelScope),
+# so they run on a cheap CPU container with a generous timeout. We reuse the repo's
+# own encoder-organizing helpers for the HunyuanVideo base + text/vision encoders,
+# but fetch ONLY the distilled action model from HY-WorldPlay (the repo's blanket
+# snapshot pulls all four ~16 GB variants — bi/ar/ar_rl/ar_distilled — and we need
+# just one). Weights are committed to the shared volume for the GPU step to reuse.
+@app.function(image=image, timeout=10800, volumes={"/weights": weights})
+def fetch_weights(hf_token: str) -> tuple[str, str]:
+    import os
+    import sys
+
+    os.environ["HF_TOKEN"] = hf_token
+    os.environ["HUGGINGFACE_TOKEN"] = hf_token
+    os.environ["HF_HOME"] = "/weights/hf"
+    os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
+    sys.path.insert(0, WORKDIR)
+    import download_models as dm
+    from huggingface_hub import snapshot_download
+
+    dm.check_dependencies()
+    hunyuan_path = dm.download_hunyuan_video()          # vae/scheduler/transformer 480p_i2v
+    dm.download_llm_text_encoder(hunyuan_path)          # Qwen2.5-VL-7B -> text_encoder/llm
+    dm.download_byt5_encoders(hunyuan_path)             # byt5-small + Glyph-SDXL-v2
+    if hf_token:
+        dm.download_vision_encoder(hunyuan_path, hf_token)  # gated FLUX SigLIP
+
+    # Distilled action model only.
+    wp = snapshot_download("tencent/HY-WorldPlay",
+                           allow_patterns=["ar_distilled_action_model/*"])
+    ddir = os.path.join(wp, "ar_distilled_action_model")
+    src = os.path.join(ddir, "model.safetensors")
+    ar_distill = os.path.join(ddir, "diffusion_pytorch_model.safetensors")
+    if os.path.exists(src) and not os.path.exists(ar_distill):
+        os.symlink(os.path.realpath(src), ar_distill)   # symlink, don't dup 16 GB
+
+    if not _have_siglip(hunyuan_path):
+        raise RuntimeError(
+            "Vision encoder (FLUX.1-Redux-dev SigLIP) is missing — the HunyuanVideo "
+            "pipeline cannot run without it. Make sure the HF_TOKEN has accepted access "
+            "at https://huggingface.co/black-forest-labs/FLUX.1-Redux-dev.")
+    if not os.path.exists(ar_distill):
+        raise RuntimeError(f"distilled action ckpt not found under {ddir}")
+
+    weights.commit()
+    print("FETCH_OK model_path:", hunyuan_path)
+    print("FETCH_OK ar_distill:", ar_distill)
+    return hunyuan_path, ar_distill
+
+
+@app.function(image=image, gpu="A100-80GB", timeout=3600,
               volumes={"/weights": weights})
-def generate(image_bytes: bytes, hf_token: str,
+def generate(image_bytes: bytes, model_path: str, ar_distill: str,
              prompt: str = "Cinematic camera moving smoothly through the scene, photorealistic, natural lighting.",
              pose: str = "w-31", video_length: int = 125, seed: int = 1) -> dict:
     import base64
@@ -77,34 +128,15 @@ def generate(image_bytes: bytes, hf_token: str,
     import os
     import subprocess
 
-    os.environ["HF_TOKEN"] = hf_token
-    os.environ["HUGGINGFACE_TOKEN"] = hf_token
     os.environ["HF_HOME"] = "/weights/hf"
-
-    # 1) Fetch/organize every required model (idempotent — skips what's cached).
-    #    Needs FLUX access on the token for the gated vision encoder.
-    subprocess.run(
-        ["python3", "download_models.py", "--hf_token", hf_token],
-        cwd=WORKDIR, check=True,
-    )
-    weights.commit()
-
-    # 2) Resolve the paths run.sh expects (download_models.py prints these).
-    from huggingface_hub import snapshot_download
-    model_path = snapshot_download("tencent/HunyuanVideo-1.5", local_files_only=True)
-    worldplay_path = snapshot_download("tencent/HY-WorldPlay", local_files_only=True)
-    ar_distill = os.path.join(
-        worldplay_path, "ar_distilled_action_model", "diffusion_pytorch_model.safetensors")
+    weights.reload()  # ensure this container sees fetch_weights' committed downloads
 
     if not _have_siglip(model_path):
-        raise RuntimeError(
-            "Vision encoder (FLUX.1-Redux-dev SigLIP) is missing — the HunyuanVideo "
-            "pipeline cannot run without it. Make sure the HF_TOKEN has accepted access "
-            "at https://huggingface.co/black-forest-labs/FLUX.1-Redux-dev.")
+        raise RuntimeError(f"vision encoder missing under {model_path} — run fetch_weights first")
     if not os.path.exists(ar_distill):
         raise RuntimeError(f"distilled action ckpt not found: {ar_distill}")
 
-    # 3) Write the input image and run the distilled AR rollout (4 steps, sp=1).
+    # Write the input image and run the distilled AR rollout (4 steps, sp=1).
     inp = os.path.join(WORKDIR, "input.png")
     open(inp, "wb").write(image_bytes)
     out_dir = os.path.join(WORKDIR, "outputs")
@@ -158,8 +190,11 @@ def run_demo(image: str = "demo/hiker.jpg",
     import os
 
     hf = os.environ.get("HF_TOKEN", "")
+    # Slow ~40-50 GB download on a cheap CPU container (idempotent, cached on the
+    # volume); then the GPU step just loads + infers.
+    model_path, ar_distill = fetch_weights.remote(hf)
     data = open(image, "rb").read()
-    result = generate.remote(data, hf, prompt, pose, video_length, seed)
+    result = generate.remote(data, model_path, ar_distill, prompt, pose, video_length, seed)
     os.makedirs("out", exist_ok=True)
     for name, b64 in result.items():
         path = os.path.join("out", name)
