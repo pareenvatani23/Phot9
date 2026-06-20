@@ -73,12 +73,15 @@ depthflow_image = (
         # headless GL: NVIDIA EGL ICD (from the driver) + mesa fallbacks + xvfb safety net
         "libegl1", "libgl1", "libglvnd0", "libgles2", "libegl1-mesa", "libgl1-mesa-dri",
         "libosmesa6", "xvfb", "mesa-utils",
+        # depthflow pulls pyaudio (C extension) -> needs a compiler + PortAudio headers
+        "build-essential", "portaudio19-dev", "pkg-config",
     )
     .env({
         "HF_HOME": "/dfcache/hf", "TORCH_HOME": "/dfcache/torch",
         "WINDOW_BACKEND": "headless",          # ShaderFlow offscreen backend
         "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
         "MPLBACKEND": "Agg",
+        "CC": "gcc", "CXX": "g++",             # add_python reports clang; force gcc
     })
     .pip_install("torch==2.6.0", "torchvision==0.21.0",
                  index_url="https://download.pytorch.org/whl/cu124")
