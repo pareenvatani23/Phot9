@@ -231,15 +231,23 @@ def run_demo(image: str = "demo/hiker.jpg",
     # volume); then the GPU step just loads + infers.
     model_path, ar_distill = fetch_weights.remote(hf)
     data = open(image, "rb").read()
-    try:
-        result = generate.remote(data, model_path, ar_distill, prompt, pose,
-                                 video_length, seed, True)
-    except Exception as e:
-        # Auto-fallback to the proven-good config (125 frames, no SR) so a clip always
-        # ships, whether the primary failed on OOM (SR + long sequence) or SR itself.
-        print(f"generate failed at video_length={video_length}+SR ({type(e).__name__}: {e});"
-              f" retrying at 125 without SR…")
-        result = generate.remote(data, model_path, ar_distill, prompt, pose, 125, seed, False)
+    # Graceful degradation: requested length+SR -> 125+SR (SR on a long clip can OOM
+    # an 80 GB GPU) -> 125 no-SR (always fits). Keeps super-resolution whenever memory
+    # allows, and still guarantees a clip.
+    plan, seen = [], set()
+    for vl, sr in [(video_length, True), (125, True), (125, False)]:
+        if (vl, sr) not in seen:
+            seen.add((vl, sr)); plan.append((vl, sr))
+    result = None
+    for idx, (vl, sr) in enumerate(plan):
+        try:
+            result = generate.remote(data, model_path, ar_distill, prompt, pose, vl, seed, sr)
+            print(f"generate OK at video_length={vl}, sr={sr}")
+            break
+        except Exception as e:
+            print(f"attempt video_length={vl}, sr={sr} failed ({type(e).__name__}: {e})")
+            if idx == len(plan) - 1:
+                raise
     os.makedirs("out", exist_ok=True)
     for name, b64 in result.items():
         path = os.path.join("out", name)
