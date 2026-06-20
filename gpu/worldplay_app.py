@@ -87,8 +87,9 @@ depthflow_image = (
                  index_url="https://download.pytorch.org/whl/cu124")
     .pip_install("depthflow==0.9.0.dev1")
     # depthflow/shaderflow set io.font_global_scale, which ImGui 1.92's font rework
-    # removed; pin imgui-bundle to the last pre-1.92 release that still has it.
-    .pip_install("imgui-bundle==1.91.0")
+    # removed; pin to 1.6.3 (the last pre-1.92 release the mirror has — versions jump
+    # 1.6.3 -> 1.92.0 — and the era depthflow 0.9.0.dev1 was built against).
+    .pip_install("imgui-bundle==1.6.3")
 )
 
 
