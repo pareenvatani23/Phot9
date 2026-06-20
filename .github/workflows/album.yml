@@ -1,0 +1,71 @@
+name: WorldPlay Album on Modal
+
+# Fan-out orchestrator: every photo in a directory -> a WorldPlay clip (parallel,
+# 480p drafts on A100) -> one stitched album montage (ffmpeg). Publishes album.mp4
+# + per-photo clips to the ci-album branch. Needs Modal credits + HF_TOKEN.
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/album.yml", "gpu/worldplay_app.py" ]
+  workflow_dispatch:
+    inputs:
+      modal_token_id:
+        description: "Modal token id (ak-...). Leave blank to use the MODAL_TOKEN_ID repo secret."
+        required: false
+      modal_token_secret:
+        description: "Modal token secret (as-...). Leave blank to use the MODAL_TOKEN_SECRET repo secret."
+        required: false
+      images_dir:
+        description: "directory of photos in the repo"
+        required: false
+        default: "demo/album"
+      title:
+        description: "album title card text"
+        required: false
+        default: "The George on Collins"
+
+permissions:
+  contents: write
+
+jobs:
+  album:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mask token
+        run: |
+          echo "::add-mask::${{ inputs.modal_token_id || secrets.MODAL_TOKEN_ID }}"
+          echo "::add-mask::${{ inputs.modal_token_secret || secrets.MODAL_TOKEN_SECRET }}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Modal client
+        run: pip install -r gpu/requirements.txt
+      - name: Build album
+        run: |
+          modal run gpu/worldplay_app.py::run_album \
+            --images-dir "${{ inputs.images_dir }}" \
+            --title "${{ inputs.title }}"
+          ls -la out || true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: worldplay-album
+          path: out/
+          if-no-files-found: warn
+      - name: Publish album to ci-album
+        continue-on-error: true
+        run: |
+          test -f out/album.mp4 || { echo "no album to publish"; exit 0; }
+          git config user.name "ci"; git config user.email "ci@local"
+          git checkout --orphan ci-album
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f out/album.mp4 out/clip_*.mp4 web/play.html
+          git commit -q -m "WorldPlay album $(date -u +%FT%TZ)"
+          git push -f origin ci-album
