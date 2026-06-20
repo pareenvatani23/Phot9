@@ -123,11 +123,12 @@ def fetch_weights(hf_token: str) -> tuple[str, str]:
     return hunyuan_path, ar_distill
 
 
-# scaledown_window keeps the GPU container alive for 10 min after a call, so
-# back-to-back clips in a session skip the cold-start + image/volume mount. (Note:
-# because each clip shells out to generate.py, the model still reloads into VRAM
-# per call — eliminating *that* needs a model-resident refactor; see notes.)
-@app.function(image=image, gpu="A100-80GB", timeout=3600, scaledown_window=600,
+# H200 (141 GB): super-resolution loads the base transformer AND a 720p SR
+# transformer simultaneously and needs >80 GB — it OOMs on an A100/H100-80GB even
+# at 125 frames. H200's headroom fits base + SR + a smoother (189-frame) orbit.
+# scaledown_window keeps the container warm 10 min so repeat clips skip cold-start
+# (the model still reloads per call via subprocess; resident-model refactor is noted).
+@app.function(image=image, gpu="H200", timeout=3600, scaledown_window=600,
               volumes={"/weights": weights})
 def generate(image_bytes: bytes, model_path: str, ar_distill: str,
              prompt: str = "Cinematic camera moving smoothly through the scene, photorealistic, natural lighting.",
