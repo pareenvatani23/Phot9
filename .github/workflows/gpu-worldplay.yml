@@ -26,9 +26,13 @@ on:
         required: false
         default: "Cinematic camera moving smoothly through the scene, photorealistic, natural lighting."
       pose:
-        description: "camera trajectory string (e.g. 'w-31' forward, 'w-3, right-1, d-4')"
+        description: "camera trajectory: 'orbit360' (full 360 fly-around), a pose string ('w-31'), or a .json path"
         required: false
         default: "w-31"
+      video_length:
+        description: "frames (must satisfy (n-1)%4==0 and AR ((n-1)//4+1)%4==0; e.g. 125, 189, 253)"
+        required: false
+        default: "125"
 
 permissions:
   contents: write
@@ -58,7 +62,8 @@ jobs:
           modal run gpu/worldplay_app.py::run_demo \
             --image "${{ inputs.image }}" \
             --prompt "${{ inputs.prompt }}" \
-            --pose "${{ inputs.pose }}"
+            --pose "${{ inputs.pose }}" \
+            --video-length "${{ inputs.video_length }}"
           ls -la out || true
       - name: Upload artifact
         uses: actions/upload-artifact@v4

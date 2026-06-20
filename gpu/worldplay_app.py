@@ -142,6 +142,30 @@ def generate(image_bytes: bytes, model_path: str, ar_distill: str,
     out_dir = os.path.join(WORKDIR, "outputs")
     os.makedirs(out_dir, exist_ok=True)
 
+    # Resolve the camera path. `pose` is either a pose string ("w-31"), an existing
+    # .json path, or the "orbit360" preset -> a closed-loop 360° orbit (third_yaw)
+    # built with the repo's own trajectory generator. A full 360 returns the camera
+    # exactly to the start pose, so the last frame reframes the opening photo.
+    pose_arg = pose
+    if pose.startswith("orbit"):
+        import json
+        import numpy as np
+        import sys as _sys
+        _sys.path.insert(0, WORKDIR)
+        from hyvideo.generate_custom_trajectory import generate_camera_trajectory_local
+        latents = (video_length - 1) // 4 + 1           # poses needed (incl. frame 0)
+        steps = latents - 1
+        motions = [{"third_yaw": 2 * np.pi / steps} for _ in range(steps)]
+        poses = generate_camera_trajectory_local(motions)
+        K = [[969.6969696969696, 0.0, 960.0],
+             [0.0, 969.6969696969696, 540.0],
+             [0.0, 0.0, 1.0]]                            # repo's reference intrinsic
+        custom = {str(i): {"extrinsic": p.tolist(), "K": K} for i, p in enumerate(poses)}
+        os.makedirs(os.path.join(WORKDIR, "assets", "pose"), exist_ok=True)
+        pose_arg = os.path.join(WORKDIR, "assets", "pose", "orbit360.json")
+        json.dump(custom, open(pose_arg, "w"))
+        print(f"orbit360: {len(poses)} poses, {np.degrees(2*np.pi/steps):.1f}°/latent -> {pose_arg}")
+
     cmd = [
         "torchrun", "--nproc_per_node=1", "--master_port=29517",
         "hyvideo/generate.py",
@@ -153,7 +177,7 @@ def generate(image_bytes: bytes, model_path: str, ar_distill: str,
         "--seed", str(seed),
         "--rewrite", "false",
         "--sr", "false", "--save_pre_sr_video",
-        "--pose", pose,
+        "--pose", pose_arg,
         "--output_path", out_dir,
         "--model_path", model_path,
         "--action_ckpt", ar_distill,
