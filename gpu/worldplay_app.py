@@ -552,9 +552,15 @@ def df_render(image_bytes: bytes, preset: str = "", intensity: float = 0.35,
 
     os.environ.setdefault("HF_HOME", "/dfcache/hf")
     df_cache.reload()
+    import io as _io
+    from PIL import Image
     d = tempfile.mkdtemp()
     img = os.path.join(d, "in.png")
-    open(img, "wb").write(_prep_image_to_16x9(image_bytes))   # exif + 16:9 fill
+    # DepthFlow matches its render resolution to the INPUT image size (ignoring -w/-h),
+    # so feed it at exactly width x height. Raw phone photos are huge and otherwise
+    # blow the GL texture limit (e.g. 17066x9600 > llvmpipe's 16384).
+    (Image.open(_io.BytesIO(_prep_image_to_16x9(image_bytes))).convert("RGB")
+        .resize((width, height), Image.LANCZOS).save(img))
     out = os.path.join(d, "out.mp4")
 
     cmd = ["depthflow", "input", "-i", img]
