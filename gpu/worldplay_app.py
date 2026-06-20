@@ -62,6 +62,30 @@ image = (
 )
 
 
+# ── DepthFlow: faithful 2.5D depth-parallax (the "Google Cinematic / Immersity" look)
+# for the memory album. Operates on the ORIGINAL photo -> native 1080p+, no
+# hallucination. Needs headless OpenGL (EGL) + a depth model (DepthAnythingV2, cached).
+df_cache = modal.Volume.from_name("depthflow-cache", create_if_missing=True)
+depthflow_image = (
+    modal.Image.from_registry("nvidia/cuda:12.4.1-devel-ubuntu22.04", add_python="3.11")
+    .apt_install(
+        "git", "wget", "ffmpeg", "libglib2.0-0", "fonts-dejavu-core",
+        # headless GL: NVIDIA EGL ICD (from the driver) + mesa fallbacks + xvfb safety net
+        "libegl1", "libgl1", "libglvnd0", "libgles2", "libegl1-mesa", "libgl1-mesa-dri",
+        "libosmesa6", "xvfb", "mesa-utils",
+    )
+    .env({
+        "HF_HOME": "/dfcache/hf", "TORCH_HOME": "/dfcache/torch",
+        "WINDOW_BACKEND": "headless",          # ShaderFlow offscreen backend
+        "__GLX_VENDOR_LIBRARY_NAME": "nvidia",
+        "MPLBACKEND": "Agg",
+    })
+    .pip_install("torch==2.6.0", "torchvision==0.21.0",
+                 index_url="https://download.pytorch.org/whl/cu124")
+    .pip_install("depthflow==0.9.0.dev1")
+)
+
+
 def _have_siglip(hunyuan_path: str) -> bool:
     import os
     d = os.path.join(hunyuan_path, "vision_encoder", "siglip")
@@ -504,3 +528,94 @@ def restitch(clips_dir: str = "demo/album_clips", title: str = "The George on Co
     os.makedirs("out", exist_ok=True)
     open(os.path.join("out", "album.mp4"), "wb").write(base64.b64decode(album_b64))
     print(f"wrote out/album.mp4 ({os.path.getsize('out/album.mp4')} bytes)")
+
+
+@app.function(image=depthflow_image, gpu="L4", timeout=1200, scaledown_window=300,
+              volumes={"/dfcache": df_cache})
+def df_render(image_bytes: bytes, preset: str = "", intensity: float = 0.35,
+              width: int = 1920, height: int = 1080, duration: float = 6.0,
+              fps: int = 30) -> str:
+    """One photo -> a 1080p depth-parallax clip via DepthFlow (headless EGL). Faithful
+    'living photo' motion on the real image — no hallucination. Empty preset = the
+    tasteful default animation; presets: circle/orbit/dolly/zoom/horizontal/vertical."""
+    import base64
+    import os
+    import subprocess
+    import tempfile
+
+    os.environ.setdefault("HF_HOME", "/dfcache/hf")
+    df_cache.reload()
+    d = tempfile.mkdtemp()
+    img = os.path.join(d, "in.png")
+    open(img, "wb").write(_prep_image_to_16x9(image_bytes))   # exif + 16:9 fill
+    out = os.path.join(d, "out.mp4")
+
+    cmd = ["depthflow", "input", "-i", img]
+    if preset:
+        cmd += [preset, "--intensity", str(intensity)]
+    cmd += ["main", "-o", out, "-w", str(width), "-h", str(height), "-t", str(duration)]
+    if fps:
+        cmd += ["--fps", str(fps)]
+    try:
+        r = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print((r.stdout or "")[-400:])
+    except subprocess.CalledProcessError as e:
+        print("EGL render failed -> retry under xvfb. stderr:", (e.stderr or "")[-1500:])
+        subprocess.run(["xvfb-run", "-a", *cmd], check=True)
+    df_cache.commit()
+    print(f"df_render: {os.path.getsize(out)} bytes, {width}x{height}, preset='{preset or 'default'}'")
+    return base64.b64encode(open(out, "rb").read()).decode()
+
+
+@app.local_entrypoint()
+def df_test(image: str = "demo/album/03_pair.jpg", preset: str = "") -> None:
+    """Validate the DepthFlow/headless-GL path on a single image before a full album."""
+    import base64
+    import os
+    b64 = df_render.remote(open(image, "rb").read(), preset)
+    os.makedirs("out", exist_ok=True)
+    open("out/df_test.mp4", "wb").write(base64.b64decode(b64))
+    print(f"wrote out/df_test.mp4 ({os.path.getsize('out/df_test.mp4')} bytes)")
+
+
+@app.local_entrypoint()
+def run_album_df(images_dir: str = "demo/album", title: str = "The George on Collins") -> None:
+    """DepthFlow memory album: each photo -> a 1080p depth-parallax clip (parallel) ->
+    one stitched montage with title + crossfades + music. Faithful, no hallucination."""
+    import base64
+    import glob
+    import os
+
+    exts = (".jpg", ".jpeg", ".png", ".webp")
+    paths = sorted(p for p in glob.glob(os.path.join(images_dir, "*"))
+                   if p.lower().endswith(exts))
+    if not paths:
+        raise SystemExit(f"no images found in {images_dir}")
+    print(f"depthflow album: {len(paths)} photos from {images_dir}")
+
+    # Alternate the tasteful default move with a gentle circle for subtle variety.
+    presets = ["", "circle"]
+    jobs = []
+    for i, p in enumerate(paths):
+        preset = presets[i % len(presets)]
+        fc = df_render.spawn(open(p, "rb").read(), preset, 0.35, 1920, 1080, 6.0, 30)
+        jobs.append((p, preset, fc))
+
+    os.makedirs("out", exist_ok=True)
+    clips = []
+    for p, preset, fc in jobs:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        try:
+            raw = base64.b64decode(fc.get())
+            open(os.path.join("out", f"clip_{stem}.mp4"), "wb").write(raw)
+            clips.append(raw)
+            print(f"  clip OK [{preset or 'default'}] {stem} ({len(raw)} bytes)")
+        except Exception as e:
+            print(f"  clip FAILED for {p}: {type(e).__name__}: {e}")
+
+    if not clips:
+        raise SystemExit("no clips produced — cannot stitch album")
+    album = base64.b64decode(stitch.remote(
+        [base64.b64encode(c).decode() for c in clips], None, title))
+    open(os.path.join("out", "album.mp4"), "wb").write(album)
+    print(f"wrote out/album.mp4 from {len(clips)} clips (1080p)")
