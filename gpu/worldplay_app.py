@@ -118,7 +118,11 @@ def fetch_weights(hf_token: str) -> tuple[str, str]:
     return hunyuan_path, ar_distill
 
 
-@app.function(image=image, gpu="A100-80GB", timeout=3600,
+# scaledown_window keeps the GPU container alive for 10 min after a call, so
+# back-to-back clips in a session skip the cold-start + image/volume mount. (Note:
+# because each clip shells out to generate.py, the model still reloads into VRAM
+# per call — eliminating *that* needs a model-resident refactor; see notes.)
+@app.function(image=image, gpu="A100-80GB", timeout=3600, scaledown_window=600,
               volumes={"/weights": weights})
 def generate(image_bytes: bytes, model_path: str, ar_distill: str,
              prompt: str = "Cinematic camera moving smoothly through the scene, photorealistic, natural lighting.",
