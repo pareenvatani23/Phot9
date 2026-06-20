@@ -122,7 +122,8 @@ def fetch_weights(hf_token: str) -> tuple[str, str]:
               volumes={"/weights": weights})
 def generate(image_bytes: bytes, model_path: str, ar_distill: str,
              prompt: str = "Cinematic camera moving smoothly through the scene, photorealistic, natural lighting.",
-             pose: str = "w-31", video_length: int = 125, seed: int = 1) -> dict:
+             pose: str = "w-31", video_length: int = 125, seed: int = 1,
+             enable_sr: bool = True) -> dict:
     import base64
     import glob
     import os
@@ -176,7 +177,7 @@ def generate(image_bytes: bytes, model_path: str, ar_distill: str,
         "--video_length", str(video_length),
         "--seed", str(seed),
         "--rewrite", "false",
-        "--sr", "false", "--save_pre_sr_video",
+        "--sr", ("true" if enable_sr else "false"), "--save_pre_sr_video",
         "--pose", pose_arg,
         "--output_path", out_dir,
         "--model_path", model_path,
@@ -196,10 +197,13 @@ def generate(image_bytes: bytes, model_path: str, ar_distill: str,
     print("WORLDPLAY_OUTPUTS:", mp4s)
     if not mp4s:
         raise RuntimeError("no .mp4 produced — check generate.py logs above")
-    # Return the largest clip first (the full / post-SR video) under a stable name.
-    mp4s.sort(key=lambda p: os.path.getsize(p), reverse=True)
+    # Prefer the super-resolved clip (gen_sr.mp4) as the primary deliverable; fall
+    # back to the largest file if SR was off or named differently.
+    sr = [p for p in mp4s if os.path.basename(p) == "gen_sr.mp4"]
+    primary = sr[0] if sr else max(mp4s, key=lambda p: os.path.getsize(p))
+    ordered = [primary] + [p for p in mp4s if p != primary]
     result = {}
-    for i, p in enumerate(mp4s):
+    for i, p in enumerate(ordered):
         name = "worldplay.mp4" if i == 0 else os.path.basename(p)
         result[name] = base64.b64encode(open(p, "rb").read()).decode()
         print(f"  {name}: {os.path.getsize(p)} bytes  ({p})")
@@ -218,7 +222,18 @@ def run_demo(image: str = "demo/hiker.jpg",
     # volume); then the GPU step just loads + infers.
     model_path, ar_distill = fetch_weights.remote(hf)
     data = open(image, "rb").read()
-    result = generate.remote(data, model_path, ar_distill, prompt, pose, video_length, seed)
+    try:
+        result = generate.remote(data, model_path, ar_distill, prompt, pose,
+                                 video_length, seed, True)
+    except Exception as e:
+        # Auto-fallback: SR + a longer sequence can exceed 80 GB. Retry once at the
+        # proven 125-frame length so a clip still ships.
+        print(f"generate failed at video_length={video_length} ({type(e).__name__}: {e});"
+              f" retrying at 125 with SR…")
+        if video_length != 125:
+            result = generate.remote(data, model_path, ar_distill, prompt, pose, 125, seed, True)
+        else:
+            raise
     os.makedirs("out", exist_ok=True)
     for name, b64 in result.items():
         path = os.path.join("out", name)
