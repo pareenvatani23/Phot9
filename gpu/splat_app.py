@@ -247,7 +247,10 @@ def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
            # Cap iterations: 3DGUT defaults to n_iterations=30000 (the 3DGS
            # standard), which is ~30+ min on an A10G. 7000 is its first
            # checkpoint -- a solid splat at ~4x less GPU time/cost.
-           f"n_iterations={n_iters}"]
+           f"n_iterations={n_iters}",
+           # 3DGUT saves .pt checkpoints, not .ply, unless this is on. Enable so
+           # we get the gaussian-splat .ply to convert to scene.splat.
+           "export_ply.enabled=true"]
     if use_ppisp:
         cmd.append("post_processing.method=ppisp")
     p = subprocess.run(cmd, cwd="/opt/3dgrut", capture_output=True, text=True)
