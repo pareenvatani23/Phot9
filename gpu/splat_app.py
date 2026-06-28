@@ -214,20 +214,23 @@ def preview_infer(video_bytes: bytes, name: str = "subject", fps: float = 4.0) -
 # ---------------------------------------------------------------------------
 @app.function(image=image, gpu="A10G", volumes={"/work": work}, timeout=60 * 60)
 def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
-                use_ppisp: bool = True) -> dict:
+                use_ppisp: bool = True, mask: bool = False) -> dict:
     import subprocess, pathlib
     root, images, sparse = _paths(name)
     _frames(root, images, video_bytes, fps)
     _colmap(root, images, sparse)
 
-    # subject masks (added AFTER colmap so SfM ignores them)
-    from rembg import remove, new_session
-    from PIL import Image
-    sess = new_session("u2net_human_seg")
-    for f in sorted(images.glob("frame_*.jpg")):
-        m = images / (f.stem + "_mask.png")
-        if not m.exists():
-            remove(Image.open(f).convert("RGBA"), session=sess, only_mask=True).save(m)
+    # Optional human-subject masks (added AFTER colmap so SfM ignores them).
+    # Off by default: only enable for a single-person subject — for a general
+    # scene the human segmenter would wrongly blank everything out.
+    if mask:
+        from rembg import remove, new_session
+        from PIL import Image
+        sess = new_session("u2net_human_seg")
+        for f in sorted(images.glob("frame_*.jpg")):
+            m = images / (f.stem + "_mask.png")
+            if not m.exists():
+                remove(Image.open(f).convert("RGBA"), session=sess, only_mask=True).save(m)
 
     run_dir = root / "runs"
     cmd = [VENV, "train.py", "--config-name", "apps/colmap_3dgut.yaml",
@@ -279,7 +282,7 @@ def preview(video: str = "demo/orbit.mp4", name: str = "summit", fps: float = 4.
 
 @app.local_entrypoint()
 def run_demo(video: str = "demo/orbit.mp4", name: str = "summit",
-             fps: float = 4.0, ppisp: bool = True):
+             fps: float = 4.0, ppisp: bool = True, mask: bool = False):
     """Full reconstruction; reuses preview's frames+poses if present."""
-    res = reconstruct.remote(open(video, "rb").read(), name, fps, ppisp)
+    res = reconstruct.remote(open(video, "rb").read(), name, fps, ppisp, mask)
     _dump(res, "out")
