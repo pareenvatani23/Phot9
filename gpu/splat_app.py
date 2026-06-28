@@ -59,6 +59,10 @@ image = (
         # Build the 3DGUT env (uv venv + compiled CUDA ext). The heavy first-build
         # step; iterate here if wheels/versions drift.
         "cd /opt/3dgrut && pip install uv && ./install_env_uv.sh",
+        # 3DGUT JIT-compiles its CUDA kernels via Slang at first run. Without
+        # slangtorch (which bundles the slangc compiler) it looks for a standalone
+        # `slangc` on PATH and dies with FileNotFoundError. Install it in the venv.
+        f"{VPIP} install slangtorch",
         # PPISP package into 3DGUT's venv (post_processing.method=ppisp needs it).
         f"{VPIP} install ppisp || {VPIP} install git+https://github.com/nv-tlabs/ppisp.git",
     )
