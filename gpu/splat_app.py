@@ -221,7 +221,8 @@ def preview_infer(video_bytes: bytes, name: str = "subject", fps: float = 4.0) -
 # ---------------------------------------------------------------------------
 @app.function(image=image, gpu="A10G", volumes={"/work": work}, timeout=60 * 60)
 def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
-                use_ppisp: bool = True, mask: bool = False) -> dict:
+                use_ppisp: bool = True, mask: bool = False,
+                n_iters: int = 7000) -> dict:
     import subprocess, pathlib
     root, images, sparse = _paths(name)
     _frames(root, images, video_bytes, fps)
@@ -242,7 +243,11 @@ def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
     run_dir = root / "runs"
     cmd = [VENV, "train.py", "--config-name", "apps/colmap_3dgut.yaml",
            f"path={root}", f"out_dir={run_dir}", f"experiment_name={name}",
-           "dataset.downsample_factor=1"]
+           "dataset.downsample_factor=1",
+           # Cap iterations: 3DGUT defaults to n_iterations=30000 (the 3DGS
+           # standard), which is ~30+ min on an A10G. 7000 is its first
+           # checkpoint -- a solid splat at ~4x less GPU time/cost.
+           f"n_iterations={n_iters}"]
     if use_ppisp:
         cmd.append("post_processing.method=ppisp")
     p = subprocess.run(cmd, cwd="/opt/3dgrut", capture_output=True, text=True)
@@ -289,7 +294,8 @@ def preview(video: str = "demo/orbit.mp4", name: str = "summit", fps: float = 4.
 
 @app.local_entrypoint()
 def run_demo(video: str = "demo/orbit.mp4", name: str = "summit",
-             fps: float = 4.0, ppisp: bool = True, mask: bool = False):
+             fps: float = 4.0, ppisp: bool = True, mask: bool = False,
+             iters: int = 7000):
     """Full reconstruction; reuses preview's frames+poses if present."""
-    res = reconstruct.remote(open(video, "rb").read(), name, fps, ppisp, mask)
+    res = reconstruct.remote(open(video, "rb").read(), name, fps, ppisp, mask, iters)
     _dump(res, "out")
