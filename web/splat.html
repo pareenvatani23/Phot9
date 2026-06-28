@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phot9 — splat viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0f13; color: #ddd;
+    font-family: system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 10px; left: 12px; font-size: 13px; opacity: .85;
+    pointer-events: none; text-shadow: 0 1px 3px #000; line-height: 1.5; }
+  #status { position: fixed; bottom: 12px; left: 12px; font-size: 13px; opacity: .9;
+    text-shadow: 0 1px 3px #000; }
+  #err { position: fixed; inset: 0; display: none; place-items: center; text-align: center;
+    padding: 2rem; }
+  #err pre { white-space: pre-wrap; opacity: .6; font-size: 12px; }
+  a { color: #7db4ff; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="hud">
+  Phot9 splat viewer · <span id="which"></span><br>
+  drag to orbit · scroll to zoom · right-drag to pan
+</div>
+<div id="status">loading…</div>
+<div id="err"></div>
+
+<script type="module">
+import * as GS from
+  "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.min.js";
+
+const q = new URLSearchParams(location.search);
+// Default: the splat published to the ci-splat branch by gpu-splat.yml.
+// Served via raw.githack.com for correct content-type + permissive CORS.
+const url = q.get("url") ||
+  "https://raw.githack.com/pareenvatani23/Phot9/ci-splat/out/scene.splat";
+document.getElementById("which").textContent = url.split("/").slice(-2).join("/");
+
+const statusEl = document.getElementById("status");
+const errEl = document.getElementById("err");
+
+function fail(e) {
+  statusEl.textContent = "";
+  errEl.style.display = "grid";
+  errEl.innerHTML = `<div><h3>Couldn't load the splat</h3><p>${url}</p>
+    <pre>${e}</pre>
+    <p>Make sure the <b>full</b> stage of the splat workflow has published
+    <code>scene.splat</code> to the <code>ci-splat</code> branch, or pass
+    <code>?url=&lt;a .splat/.ply URL&gt;</code>.</p></div>`;
+  console.error(e);
+}
+
+try {
+  const viewer = new GS.Viewer({
+    cameraUp: [0, -1, 0],                 // 3DGS/COLMAP convention; orbit to reorient
+    initialCameraPosition: [0, 0, -5],
+    initialCameraLookAt: [0, 0, 0],
+    // REQUIRED on GitHub Pages / githack: those origins aren't cross-origin
+    // isolated, so SharedArrayBuffer is unavailable. This keeps the worker on
+    // plain ArrayBuffers instead.
+    sharedMemoryForWorkers: false,
+  });
+  await viewer.addSplatScene(url, {
+    progressiveLoad: true,
+    showLoadingUI: false,
+    onProgress: (pct) => { if (pct != null) statusEl.textContent = `loading… ${Math.round(pct)}%`; },
+  });
+  viewer.start();
+  statusEl.textContent = "drag to orbit · scroll to zoom";
+} catch (e) {
+  fail(e);
+}
+</script>
+</body>
+</html>
