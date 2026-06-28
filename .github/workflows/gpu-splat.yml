@@ -1,0 +1,96 @@
+name: Splat + PPISP on Modal (A10G)
+
+# Multi-view orbit video -> photoreal Gaussian splat. Runner drives Modal (no
+# GPU on the runner); COLMAP -> NVIDIA 3DGUT + PPISP -> scene.splat, published to
+# the ci-splat branch so web/world.html (Spark viewer) can load it via
+# ?world=<raw-url>/scene.splat .
+#
+# Heavy first build (compiles 3DGRUT CUDA extensions) — needs Modal credits.
+# Commit your orbit clip to demo/orbit.mp4 first (see CAPTURE guidance).
+on:
+  push:
+    branches: [ "claude/diorama-build-spec-h6906m" ]
+    paths: [ ".github/workflows/gpu-splat.yml", "gpu/splat_app.py" ]
+  workflow_dispatch:
+    inputs:
+      modal_token_id:
+        description: "Modal token id (ak-...)"
+        required: true
+      modal_token_secret:
+        description: "Modal token secret (as-...)"
+        required: true
+      video:
+        description: "orbit video path in repo"
+        required: false
+        default: "demo/orbit.mp4"
+      name:
+        description: "run id / subject name"
+        required: false
+        default: "summit"
+      stage:
+        description: "preview (cheap pose check) or full (train)"
+        required: false
+        default: "preview"
+      fps:
+        description: "frame extraction fps"
+        required: false
+        default: "4"
+
+permissions:
+  contents: write
+
+jobs:
+  splat:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ inputs.modal_token_id }}
+      MODAL_TOKEN_SECRET: ${{ inputs.modal_token_secret }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mask token
+        run: |
+          echo "::add-mask::${{ inputs.modal_token_id }}"
+          echo "::add-mask::${{ inputs.modal_token_secret }}"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Modal client
+        run: pip install -r gpu/requirements.txt
+
+      - name: Run (${{ inputs.stage }})
+        run: |
+          ENTRY=preview
+          [ "${{ inputs.stage }}" = "full" ] && ENTRY=run_demo
+          modal run gpu/splat_app.py::$ENTRY \
+            --video "${{ inputs.video }}" \
+            --name "${{ inputs.name }}" \
+            --fps "${{ inputs.fps }}"
+          ls -la out || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: splat-${{ inputs.name }}-${{ inputs.stage }}
+          path: out/
+          if-no-files-found: warn
+
+      - name: Publish to ci-splat
+        if: ${{ inputs.stage == 'full' }}
+        run: |
+          test -d out && [ -n "$(ls -A out 2>/dev/null)" ] || { echo "no outputs"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Dedicated orphan branch — never races with the feature branch.
+          git checkout --orphan ci-splat
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f out/scene.splat out/scene.ply out/orbit.mp4 2>/dev/null || true
+          git commit -q -m "Splat $(date -u +%FT%TZ)"
+          for i in 1 2 3 4 5; do
+            git push -f origin ci-splat && { echo "pushed ci-splat"; break; }
+            echo "retry $i"; sleep 4
+          done
