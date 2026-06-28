@@ -103,11 +103,14 @@ def _colmap(root, images, sparse):
     sparse.mkdir(parents=True, exist_ok=True)
     db = root / "colmap.db"
     run = lambda a: subprocess.run(a, check=True, capture_output=True, text=True)
+    # CPU SIFT (use_gpu 0): COLMAP's GPU SiftGPU needs an OpenGL/EGL context,
+    # which a headless Modal GPU container lacks -> SIGABRT. CPU is headless-safe
+    # and fast enough at this frame count.
     run(["colmap", "feature_extractor", "--database_path", str(db),
          "--image_path", str(images), "--ImageReader.single_camera", "1",
-         "--SiftExtraction.use_gpu", "1"])
+         "--SiftExtraction.use_gpu", "0"])
     run(["colmap", "exhaustive_matcher", "--database_path", str(db),
-         "--SiftMatching.use_gpu", "1"])
+         "--SiftMatching.use_gpu", "0"])
     run(["colmap", "mapper", "--database_path", str(db),
          "--image_path", str(images), "--output_path", str(sparse)])
     if not (sparse / "0").exists():
