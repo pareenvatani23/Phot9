@@ -8,11 +8,11 @@
   html, body { margin: 0; height: 100%; background: #0d0f13; color: #ddd;
     font-family: system-ui, sans-serif; overflow: hidden; }
   #hud { position: fixed; top: 10px; left: 12px; font-size: 13px; opacity: .85;
-    pointer-events: none; text-shadow: 0 1px 3px #000; line-height: 1.5; }
+    pointer-events: none; text-shadow: 0 1px 3px #000; line-height: 1.5; z-index: 10; }
   #status { position: fixed; bottom: 12px; left: 12px; font-size: 13px; opacity: .9;
-    text-shadow: 0 1px 3px #000; }
+    text-shadow: 0 1px 3px #000; z-index: 10; max-width: 92vw; }
   #err { position: fixed; inset: 0; display: none; place-items: center; text-align: center;
-    padding: 2rem; }
+    padding: 2rem; z-index: 20; }
   #err pre { white-space: pre-wrap; opacity: .6; font-size: 12px; }
   a { color: #7db4ff; }
   canvas { display: block; }
@@ -23,7 +23,7 @@
   Phot9 splat viewer · <span id="which"></span><br>
   drag to orbit · scroll to zoom · right-drag to pan
 </div>
-<div id="status">loading…</div>
+<div id="status">starting…</div>
 <div id="err"></div>
 
 <script type="module">
@@ -31,46 +31,66 @@ import * as GS from
   "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.min.js";
 
 const q = new URLSearchParams(location.search);
-// Default: the splat published to the ci-splat branch by gpu-splat.yml.
-// Served via raw.githack.com for correct content-type + permissive CORS.
+// Default: the splat published to ci-splat by gpu-splat.yml. raw.githubusercontent
+// sends access-control-allow-origin:* so a cross-origin fetch works.
 const url = q.get("url") ||
-  "https://raw.githack.com/pareenvatani23/Phot9/ci-splat/out/scene.splat";
+  "https://raw.githubusercontent.com/pareenvatani23/Phot9/ci-splat/out/scene.splat";
 document.getElementById("which").textContent = url.split("/").slice(-2).join("/");
 
 const statusEl = document.getElementById("status");
 const errEl = document.getElementById("err");
-
-function fail(e) {
+function fail(msg) {
   statusEl.textContent = "";
   errEl.style.display = "grid";
   errEl.innerHTML = `<div><h3>Couldn't load the splat</h3><p>${url}</p>
-    <pre>${e}</pre>
-    <p>Make sure the <b>full</b> stage of the splat workflow has published
-    <code>scene.splat</code> to the <code>ci-splat</code> branch, or pass
-    <code>?url=&lt;a .splat/.ply URL&gt;</code>.</p></div>`;
-  console.error(e);
+    <pre>${msg}</pre>
+    <p>Pass <code>?url=&lt;a .splat/.ply URL&gt;</code> to try another file.</p></div>`;
+  console.error(msg);
 }
 
+// 1) Download the bytes ourselves. This (a) surfaces any CORS/network error as a
+//    clear message instead of an endless "loading…", and (b) lets us frame the
+//    camera on the actual splat so it can't load "off-screen" into a black view.
+statusEl.textContent = "downloading splat…";
+let buf;
+try {
+  const r = await fetch(url, { mode: "cors", cache: "reload" });
+  if (!r.ok) throw new Error(`HTTP ${r.status} fetching the splat`);
+  buf = await r.arrayBuffer();
+} catch (e) { fail(e); throw e; }
+
+// 2) Frame the camera from the .splat positions (antimatter15 layout: 32 bytes/
+//    splat, first 3 float32 = xyz).
+const dv = new DataView(buf), N = Math.floor(buf.byteLength / 32);
+let cx = 0, cy = 0, cz = 0, cnt = 0;
+let mnx = 1e30, mny = 1e30, mnz = 1e30, mxx = -1e30, mxy = -1e30, mxz = -1e30;
+const step = Math.max(1, Math.floor(N / 20000));   // sample for speed
+for (let i = 0; i < N; i += step) {
+  const o = i * 32;
+  const x = dv.getFloat32(o, true), y = dv.getFloat32(o + 4, true), z = dv.getFloat32(o + 8, true);
+  if (!isFinite(x + y + z)) continue;
+  cx += x; cy += y; cz += z; cnt++;
+  mnx = Math.min(mnx, x); mny = Math.min(mny, y); mnz = Math.min(mnz, z);
+  mxx = Math.max(mxx, x); mxy = Math.max(mxy, y); mxz = Math.max(mxz, z);
+}
+cx /= cnt || 1; cy /= cnt || 1; cz /= cnt || 1;
+const ext = Math.hypot(mxx - mnx, mxy - mny, mxz - mnz) || 4;
+const dist = ext * 0.9 + 0.5;
+statusEl.textContent = `${N.toLocaleString()} splats · ${(buf.byteLength/1e6).toFixed(2)} MB · building…`;
+
+// 3) Build the viewer aimed at the splat. addSplatScene re-fetches the URL
+//    (non-progressive = whole-file parse, which is the reliable path here).
 try {
   const viewer = new GS.Viewer({
-    cameraUp: [0, -1, 0],                 // 3DGS/COLMAP convention; orbit to reorient
-    initialCameraPosition: [0, 0, -5],
-    initialCameraLookAt: [0, 0, 0],
-    // REQUIRED on GitHub Pages / githack: those origins aren't cross-origin
-    // isolated, so SharedArrayBuffer is unavailable. This keeps the worker on
-    // plain ArrayBuffers instead.
-    sharedMemoryForWorkers: false,
+    cameraUp: [0, -1, 0],                          // 3DGS/COLMAP convention
+    initialCameraPosition: [cx, cy, cz + dist],
+    initialCameraLookAt: [cx, cy, cz],
+    sharedMemoryForWorkers: false,                 // GitHub hosts aren't cross-origin isolated
   });
-  await viewer.addSplatScene(url, {
-    progressiveLoad: true,
-    showLoadingUI: false,
-    onProgress: (pct) => { if (pct != null) statusEl.textContent = `loading… ${Math.round(pct)}%`; },
-  });
+  await viewer.addSplatScene(url, { progressiveLoad: false, showLoadingUI: false });
   viewer.start();
-  statusEl.textContent = "drag to orbit · scroll to zoom";
-} catch (e) {
-  fail(e);
-}
+  statusEl.textContent = "drag to orbit · scroll to zoom  ·  (rough test splat)";
+} catch (e) { fail(e); }
 </script>
 </body>
 </html>
