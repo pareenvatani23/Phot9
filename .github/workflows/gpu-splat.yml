@@ -94,8 +94,11 @@ jobs:
           # Dedicated orphan branch — never races with the feature branch.
           git checkout --orphan ci-splat
           git rm -rf --cached . >/dev/null 2>&1 || true
-          git add -f out/scene.splat out/scene.ply out/orbit.mp4 2>/dev/null || true
-          git commit -q -m "Splat $(date -u +%FT%TZ)"
+          # Force-add whatever the entrypoint wrote (out/ is gitignored; on the
+          # runner that's scene.splat). Adding the dir avoids aborting on files
+          # that weren't produced (scene.ply / orbit.mp4 stay on the volume).
+          git add -f out/ 2>/dev/null || true
+          git commit -q -m "Splat $(date -u +%FT%TZ)" || { echo "nothing to commit"; exit 0; }
           for i in 1 2 3 4 5; do
             git push -f origin ci-splat && { echo "pushed ci-splat"; break; }
             echo "retry $i"; sleep 4

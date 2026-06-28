@@ -225,6 +225,18 @@ def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
                 n_iters: int = 7000) -> dict:
     import subprocess, pathlib
     root, images, sparse = _paths(name)
+
+    # Idempotent: if this name was already trained+exported (persisted on the
+    # volume), just republish the splat instead of paying to retrain.
+    cached = root / "out" / "scene.splat"
+    if cached.exists():
+        print("[reuse] scene.splat already on volume — skipping training")
+        res = {"scene.splat": _b64(cached), "reused": True}
+        cp = root / "out" / "orbit.mp4"
+        if cp.exists():
+            res["orbit.mp4"] = _b64(cp)
+        return res
+
     _frames(root, images, video_bytes, fps)
     _colmap(root, images, sparse)
 
