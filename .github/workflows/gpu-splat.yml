@@ -65,8 +65,15 @@ jobs:
       - name: Fetch orbit video
         run: |
           mkdir -p demo
-          curl -fL "${{ inputs.video_url }}" -o demo/orbit.mp4
+          # Browser UA + follow redirects so free stock hosts (e.g. Pexels
+          # download endpoints) serve the file rather than a bot-challenge page.
+          curl -fL --retry 3 \
+            -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36" \
+            "${{ inputs.video_url }}" -o demo/orbit.mp4
           ls -lh demo/orbit.mp4
+          # Fail early with a clear message if we got HTML instead of a video.
+          file demo/orbit.mp4 | grep -qiE 'media|mp4|mov|matroska|webm' \
+            || { echo "::error::downloaded file is not a video (host likely blocked the download or needs a direct CDN link)"; file demo/orbit.mp4; exit 1; }
 
       - name: Run (${{ inputs.stage }})
         run: |
