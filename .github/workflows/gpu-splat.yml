@@ -35,6 +35,10 @@ on:
         description: "frame extraction fps"
         required: false
         default: "4"
+      iters:
+        description: "training iterations (30000 = crisp, 7000 = fast)"
+        required: false
+        default: "30000"
 
 permissions:
   contents: write
@@ -77,12 +81,14 @@ jobs:
 
       - name: Run (${{ inputs.stage }})
         run: |
-          ENTRY=preview
-          [ "${{ inputs.stage }}" = "full" ] && ENTRY=run_demo
-          modal run gpu/splat_app.py::$ENTRY \
-            --video demo/orbit.mp4 \
-            --name "${{ inputs.name }}" \
-            --fps "${{ inputs.fps }}"
+          if [ "${{ inputs.stage }}" = "full" ]; then
+            modal run gpu/splat_app.py::run_demo \
+              --video demo/orbit.mp4 --name "${{ inputs.name }}" \
+              --fps "${{ inputs.fps }}" --iters "${{ inputs.iters }}"
+          else
+            modal run gpu/splat_app.py::preview \
+              --video demo/orbit.mp4 --name "${{ inputs.name }}" --fps "${{ inputs.fps }}"
+          fi
           ls -la out || true
 
       - name: Upload artifact

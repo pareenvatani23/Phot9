@@ -95,10 +95,11 @@ try {
     initialCameraPosition: [cx, cy, cz + dist],
     initialCameraLookAt: [cx, cy, cz],
     sharedMemoryForWorkers: false,                 // GitHub hosts aren't cross-origin isolated
+    antialiased: true,                             // crisper splat edges (ignored if unsupported)
   });
   await viewer.addSplatScene(url, { progressiveLoad: false, showLoadingUI: false });
   viewer.start();
-  statusEl.textContent = "drag to orbit · scroll to zoom  ·  (rough test splat)";
+  statusEl.textContent = "drag to orbit · scroll to zoom";
 } catch (e) { fail(e); }
 </script>
 </body>

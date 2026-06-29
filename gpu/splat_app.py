@@ -135,6 +135,16 @@ def _ply_to_splat(ply_path, splat_path):
     SH_C0 = 0.28209479177387814
     color = 0.5 + SH_C0 * np.stack([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], 1)
     opacity = 1.0 / (1.0 + np.exp(-np.asarray(v["opacity"])))
+
+    # Floater/needle trim: drop near-transparent gaussians and the largest ~1%
+    # by scale (the long spikes). 3DGUT has no opacity-reset, so these survive
+    # training and wreck the render unless removed on export.
+    smax = scale.max(1)
+    keep = (opacity > 0.10) & (smax <= np.percentile(smax, 99.0))
+    xyz, scale, rot = xyz[keep], scale[keep], rot[keep]
+    color, opacity = color[keep], opacity[keep]
+    print(f"[trim] kept {int(keep.sum())}/{keep.size} gaussians")
+
     rgba = np.clip(np.concatenate(
         [color, opacity[:, None]], 1) * 255, 0, 255).astype(np.uint8)
     order = np.argsort(-(opacity * scale.prod(1)))
@@ -222,21 +232,11 @@ def preview_infer(video_bytes: bytes, name: str = "subject", fps: float = 4.0) -
 @app.function(image=image, gpu="A10G", volumes={"/work": work}, timeout=60 * 60)
 def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
                 use_ppisp: bool = True, mask: bool = False,
-                n_iters: int = 7000) -> dict:
+                n_iters: int = 30000) -> dict:
     import subprocess, pathlib
     root, images, sparse = _paths(name)
-
-    # Idempotent: if this name was already trained+exported (persisted on the
-    # volume), just republish the splat instead of paying to retrain.
-    cached = root / "out" / "scene.splat"
-    if cached.exists():
-        print("[reuse] scene.splat already on volume — skipping training")
-        res = {"scene.splat": _b64(cached), "reused": True}
-        cp = root / "out" / "orbit.mp4"
-        if cp.exists():
-            res["orbit.mp4"] = _b64(cp)
-        return res
-
+    # _frames / _colmap reuse on-disk results, so a re-run with the same name
+    # skips SfM and just retrains (e.g. to bump iterations) cheaply.
     _frames(root, images, video_bytes, fps)
     _colmap(root, images, sparse)
 
@@ -256,9 +256,8 @@ def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
     cmd = [VENV, "train.py", "--config-name", "apps/colmap_3dgut.yaml",
            f"path={root}", f"out_dir={run_dir}", f"experiment_name={name}",
            "dataset.downsample_factor=1",
-           # Cap iterations: 3DGUT defaults to n_iterations=30000 (the 3DGS
-           # standard), which is ~30+ min on an A10G. 7000 is its first
-           # checkpoint -- a solid splat at ~4x less GPU time/cost.
+           # Full 30000 by default for crisp output (3DGS standard); ~20 min on
+           # A10G. Lower it (e.g. iters=7000) for a fast/cheap preview-quality run.
            f"n_iterations={n_iters}",
            # 3DGUT saves .pt checkpoints, not .ply, unless this is on. Enable so
            # we get the gaussian-splat .ply to convert to scene.splat.
@@ -310,7 +309,7 @@ def preview(video: str = "demo/orbit.mp4", name: str = "summit", fps: float = 4.
 @app.local_entrypoint()
 def run_demo(video: str = "demo/orbit.mp4", name: str = "summit",
              fps: float = 4.0, ppisp: bool = True, mask: bool = False,
-             iters: int = 7000):
+             iters: int = 30000):
     """Full reconstruction; reuses preview's frames+poses if present."""
     res = reconstruct.remote(open(video, "rb").read(), name, fps, ppisp, mask, iters)
     _dump(res, "out")
