@@ -26,6 +26,15 @@
 <div id="status">starting…</div>
 <div id="err"></div>
 
+<!-- The splat library imports `three` as a bare specifier, so an import map is
+     required (same versions world.html uses). Must precede the module script. -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+}}
+</script>
+
 <script type="module">
 import * as GS from
   "https://cdn.jsdelivr.net/npm/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.min.js";
