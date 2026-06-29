@@ -28,7 +28,7 @@ on:
         required: false
         default: "summit"
       stage:
-        description: "preview (cheap pose check) or full (train)"
+        description: "preview (pose check) / full (train) / refilter (re-export, no retrain)"
         required: false
         default: "preview"
       fps:
@@ -39,6 +39,18 @@ on:
         description: "training iterations (30000 = crisp, 7000 = fast)"
         required: false
         default: "30000"
+      opacity:
+        description: "spike filter: min opacity (higher = drop more faint floaters)"
+        required: false
+        default: "0.12"
+      needle:
+        description: "spike filter: max axis ratio (lower = cut more needles, e.g. 4)"
+        required: false
+        default: "8"
+      pct:
+        description: "spike filter: drop biggest-size percentile (e.g. 98)"
+        required: false
+        default: "99"
 
 permissions:
   contents: write
@@ -67,6 +79,7 @@ jobs:
         run: pip install -r gpu/requirements.txt
 
       - name: Fetch orbit video
+        if: ${{ inputs.stage != 'refilter' }}
         run: |
           mkdir -p demo
           # Browser UA + follow redirects so free stock hosts (e.g. Pexels
@@ -81,14 +94,19 @@ jobs:
 
       - name: Run (${{ inputs.stage }})
         run: |
-          if [ "${{ inputs.stage }}" = "full" ]; then
-            modal run gpu/splat_app.py::run_demo \
-              --video demo/orbit.mp4 --name "${{ inputs.name }}" \
-              --fps "${{ inputs.fps }}" --iters "${{ inputs.iters }}"
-          else
-            modal run gpu/splat_app.py::preview \
-              --video demo/orbit.mp4 --name "${{ inputs.name }}" --fps "${{ inputs.fps }}"
-          fi
+          case "${{ inputs.stage }}" in
+            full)
+              modal run gpu/splat_app.py::run_demo \
+                --video demo/orbit.mp4 --name "${{ inputs.name }}" \
+                --fps "${{ inputs.fps }}" --iters "${{ inputs.iters }}" ;;
+            refilter)
+              modal run gpu/splat_app.py::refilter \
+                --name "${{ inputs.name }}" --opacity "${{ inputs.opacity }}" \
+                --needle "${{ inputs.needle }}" --pct "${{ inputs.pct }}" ;;
+            *)
+              modal run gpu/splat_app.py::preview \
+                --video demo/orbit.mp4 --name "${{ inputs.name }}" --fps "${{ inputs.fps }}" ;;
+          esac
           ls -la out || true
 
       - name: Upload artifact
@@ -99,7 +117,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish to ci-splat
-        if: ${{ inputs.stage == 'full' }}
+        if: ${{ inputs.stage == 'full' || inputs.stage == 'refilter' }}
         run: |
           test -d out && [ -n "$(ls -A out 2>/dev/null)" ] || { echo "no outputs"; exit 0; }
           git config user.name "github-actions[bot]"

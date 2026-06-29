@@ -122,9 +122,10 @@ def _colmap(root, images, sparse):
                            "blurry / low-overlap. See CAPTURE guidance.")
 
 
-def _ply_to_splat(ply_path, splat_path):
+def _ply_to_splat(ply_path, splat_path, min_opacity=0.12,
+                  max_needle=8.0, scale_pct=99.0):
     """3DGS .ply -> antimatter15 .splat (32 bytes/gaussian: pos f32*3,
-    scale f32*3, color u8*4, quat u8*4). Sorted by opacity*size desc."""
+    scale f32*3, color u8*4, quat u8*4), with spike/floater removal."""
     import numpy as np
     from plyfile import PlyData
     v = PlyData.read(str(ply_path))["vertex"]
@@ -134,16 +135,22 @@ def _ply_to_splat(ply_path, splat_path):
     rot /= (np.linalg.norm(rot, axis=1, keepdims=True) + 1e-9)
     SH_C0 = 0.28209479177387814
     color = 0.5 + SH_C0 * np.stack([v["f_dc_0"], v["f_dc_1"], v["f_dc_2"]], 1)
-    opacity = 1.0 / (1.0 + np.exp(-np.asarray(v["opacity"])))
+    opacity = 1.0 / (1.0 + np.exp(-np.asarray(v["opacity"], dtype=np.float64))).astype(np.float32)
 
-    # Floater/needle trim: drop near-transparent gaussians and the largest ~1%
-    # by scale (the long spikes). 3DGUT has no opacity-reset, so these survive
-    # training and wreck the render unless removed on export.
+    # Spike/floater removal (3DGUT has no opacity-reset, so these survive):
+    #  - opacity > min_opacity            -> drop faint floaters
+    #  - (max axis / median axis) < max_needle -> drop NEEDLES specifically.
+    #       A spike has one axis >> the others; a legit flat disk has
+    #       max ~= median, so disks are kept and only spikes are cut.
+    #  - size < the scale_pct percentile  -> drop the few giant blobs
     smax = scale.max(1)
-    keep = (opacity > 0.10) & (smax <= np.percentile(smax, 99.0))
+    smed = np.median(scale, axis=1)
+    needle = smax / (smed + 1e-9)
+    keep = (opacity > min_opacity) & (needle < max_needle) & (smax < np.percentile(smax, scale_pct))
     xyz, scale, rot = xyz[keep], scale[keep], rot[keep]
     color, opacity = color[keep], opacity[keep]
-    print(f"[trim] kept {int(keep.sum())}/{keep.size} gaussians")
+    print(f"[trim] kept {int(keep.sum())}/{keep.size} gaussians "
+          f"(opacity>{min_opacity}, needle<{max_needle}, <p{scale_pct} size)")
 
     rgba = np.clip(np.concatenate(
         [color, opacity[:, None]], 1) * 255, 0, 255).astype(np.uint8)
@@ -286,6 +293,24 @@ def reconstruct(video_bytes: bytes, name: str = "subject", fps: float = 4.0,
 
 
 # ---------------------------------------------------------------------------
+# REFILTER — cheap CPU re-export: re-runs the spike filter on the already-
+# trained scene.ply (no GPU, no retrain) so filter thresholds can be tuned in
+# ~1 min instead of a 15-min retrain.
+# ---------------------------------------------------------------------------
+@app.function(image=image, volumes={"/work": work}, timeout=60 * 10)
+def refilter_infer(name: str, min_opacity: float = 0.12,
+                   max_needle: float = 8.0, scale_pct: float = 99.0) -> dict:
+    root, _, _ = _paths(name)
+    ply = root / "out" / "scene.ply"
+    if not ply.exists():
+        raise RuntimeError(f"no cached {ply} — run the full stage first")
+    n = _ply_to_splat(ply, root / "out" / "scene.splat",
+                      min_opacity, max_needle, scale_pct)
+    work.commit()
+    return {"gaussians": n, "scene.splat": _b64(root / "out" / "scene.splat")}
+
+
+# ---------------------------------------------------------------------------
 # Local entrypoints (CI calls these; results written to ./out).
 # ---------------------------------------------------------------------------
 def _dump(result, outdir="out"):
@@ -312,4 +337,13 @@ def run_demo(video: str = "demo/orbit.mp4", name: str = "summit",
              iters: int = 30000):
     """Full reconstruction; reuses preview's frames+poses if present."""
     res = reconstruct.remote(open(video, "rb").read(), name, fps, ppisp, mask, iters)
+    _dump(res, "out")
+
+
+@app.local_entrypoint()
+def refilter(name: str = "summit", opacity: float = 0.12,
+             needle: float = 8.0, pct: float = 99.0):
+    """Re-export scene.splat from the cached .ply with new spike-filter
+    thresholds — cheap CPU run, no retrain."""
+    res = refilter_infer.remote(name, opacity, needle, pct)
     _dump(res, "out")
