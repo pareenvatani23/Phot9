@@ -311,6 +311,60 @@ def refilter_infer(name: str, min_opacity: float = 0.12,
 
 
 # ---------------------------------------------------------------------------
+# RENDER — use 3DGRUT's OWN renderer (render.py: OptiX/splatting, full SH) to
+# render the trained checkpoint and assemble a crisp turntable mp4. This is the
+# "NVIDIA demo" quality — no web-viewer / DC-only-color approximation. Also
+# restores a balanced scene.splat for the interactive web viewer.
+# ---------------------------------------------------------------------------
+@app.function(image=image, gpu="A10G", volumes={"/work": work}, timeout=60 * 20)
+def render_infer(name: str, fps: int = 24) -> dict:
+    import subprocess, shutil
+    root, _, _ = _paths(name)
+    run_dir = root / "runs"
+    ckpts = sorted(run_dir.rglob("ckpt_last.pt"), key=lambda p: p.stat().st_mtime) \
+        or sorted(run_dir.rglob("*.pt"), key=lambda p: p.stat().st_mtime)
+    if not ckpts:
+        raise RuntimeError("no checkpoint found — run the full stage first")
+    ckpt = ckpts[-1]
+    print(f"[render] checkpoint {ckpt}")
+
+    render_out = root / "render"
+    shutil.rmtree(render_out, ignore_errors=True); render_out.mkdir(parents=True)
+    p = subprocess.run([VENV, "render.py", "--checkpoint", str(ckpt),
+                        "--out-dir", str(render_out)],
+                       cwd="/opt/3dgrut", capture_output=True, text=True)
+    print(p.stdout[-6000:])
+    if p.returncode != 0:
+        print("STDERR:", p.stderr[-6000:]); raise RuntimeError("render.py failed; see logs")
+
+    imgs = sorted(q for ext in ("*.png", "*.jpg", "*.jpeg")
+                  for q in render_out.rglob(ext))
+    print(f"[render] {len(imgs)} frames; sample: {[str(i.relative_to(render_out)) for i in imgs[:5]]}")
+    if not imgs:
+        tree = [str(q.relative_to(render_out)) for q in render_out.rglob('*')][:60]
+        raise RuntimeError(f"render produced no images. tree={tree}")
+
+    seq = root / "render_seq"; shutil.rmtree(seq, ignore_errors=True); seq.mkdir()
+    for i, im in enumerate(imgs):
+        shutil.copy(im, seq / f"f_{i:05d}.png")
+    out = root / "out"; out.mkdir(exist_ok=True)
+    mp4 = out / "native_orbit.mp4"
+    subprocess.run(["ffmpeg", "-y", "-framerate", str(fps),
+                    "-i", str(seq / "f_%05d.png"),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(mp4)],
+                   check=True, capture_output=True)
+
+    # also restore a balanced web splat from the cached ply
+    res = {"frames": len(imgs), "native_orbit.mp4": _b64(mp4)}
+    ply = out / "scene.ply"
+    if ply.exists():
+        _ply_to_splat(ply, out / "scene.splat")          # default (balanced) filter
+        res["scene.splat"] = _b64(out / "scene.splat")
+    work.commit()
+    return res
+
+
+# ---------------------------------------------------------------------------
 # Local entrypoints (CI calls these; results written to ./out).
 # ---------------------------------------------------------------------------
 def _dump(result, outdir="out"):
@@ -346,4 +400,11 @@ def refilter(name: str = "summit", opacity: float = 0.12,
     """Re-export scene.splat from the cached .ply with new spike-filter
     thresholds — cheap CPU run, no retrain."""
     res = refilter_infer.remote(name, opacity, needle, pct)
+    _dump(res, "out")
+
+
+@app.local_entrypoint()
+def render(name: str = "summit", fps: int = 24):
+    """Render the trained checkpoint with 3DGRUT's own renderer -> native mp4."""
+    res = render_infer.remote(name, fps)
     _dump(res, "out")

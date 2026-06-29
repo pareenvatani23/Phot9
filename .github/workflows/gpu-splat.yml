@@ -28,7 +28,7 @@ on:
         required: false
         default: "summit"
       stage:
-        description: "preview (pose check) / full (train) / refilter (re-export, no retrain)"
+        description: "preview / full / refilter / render (native NVIDIA renderer -> mp4)"
         required: false
         default: "preview"
       fps:
@@ -79,7 +79,7 @@ jobs:
         run: pip install -r gpu/requirements.txt
 
       - name: Fetch orbit video
-        if: ${{ inputs.stage != 'refilter' }}
+        if: ${{ inputs.stage != 'refilter' && inputs.stage != 'render' }}
         run: |
           mkdir -p demo
           # Browser UA + follow redirects so free stock hosts (e.g. Pexels
@@ -103,6 +103,8 @@ jobs:
               modal run gpu/splat_app.py::refilter \
                 --name "${{ inputs.name }}" --opacity "${{ inputs.opacity }}" \
                 --needle "${{ inputs.needle }}" --pct "${{ inputs.pct }}" ;;
+            render)
+              modal run gpu/splat_app.py::render --name "${{ inputs.name }}" ;;
             *)
               modal run gpu/splat_app.py::preview \
                 --video demo/orbit.mp4 --name "${{ inputs.name }}" --fps "${{ inputs.fps }}" ;;
@@ -117,7 +119,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish to ci-splat
-        if: ${{ inputs.stage == 'full' || inputs.stage == 'refilter' }}
+        if: ${{ inputs.stage != 'preview' }}
         run: |
           test -d out && [ -n "$(ls -A out 2>/dev/null)" ] || { echo "no outputs"; exit 0; }
           git config user.name "github-actions[bot]"
